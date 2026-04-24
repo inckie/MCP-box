@@ -111,38 +111,16 @@ class McpAccessibilityService : AccessibilityService() {
             .put("ok", false)
             .put("error", "No active window")
 
+        val snapshotNodes = bfsSnapshotNodes(root, maxNodes.coerceIn(1, MAX_SCAN_NODES))
         val nodesJson = JSONArray()
-        var count = 0
-        for ((index, nodeDepth) in bfsNodesWithDepth(root, maxNodes.coerceIn(1, MAX_SCAN_NODES)).withIndex()) {
-            val (node, depth) = nodeDepth
-            val rect = Rect()
-            node.getBoundsInScreen(rect)
-            nodesJson.put(
-                JSONObject()
-                    .put("index", index)
-                    .put("depth", depth)
-                    .put("text", node.text?.toString().orEmpty())
-                    .put("contentDesc", node.contentDescription?.toString().orEmpty())
-                    .put("viewId", node.viewIdResourceName.orEmpty())
-                    .put("className", node.className?.toString().orEmpty())
-                    .put("packageName", node.packageName?.toString().orEmpty())
-                    .put("clickable", node.isClickable)
-                    .put("editable", node.isEditable)
-                    .put("scrollable", node.isScrollable)
-                    .put("enabled", node.isEnabled)
-                    .put("bounds", JSONObject()
-                        .put("left", rect.left)
-                        .put("top", rect.top)
-                        .put("right", rect.right)
-                        .put("bottom", rect.bottom))
-            )
-            count++
+        for ((index, snapshotNode) in snapshotNodes.withIndex()) {
+            nodesJson.put(nodeToJson(snapshotNode.node, index, snapshotNode.depth, snapshotNode.parentIndex))
         }
 
         return JSONObject()
             .put("ok", true)
             .put("capturedAtMs", SystemClock.elapsedRealtime())
-            .put("nodeCount", count)
+            .put("nodeCount", snapshotNodes.size)
             .put("nodes", nodesJson)
     }
 
@@ -151,32 +129,20 @@ class McpAccessibilityService : AccessibilityService() {
         val results = JSONArray()
         val boundedLimit = limit.coerceIn(1, 100)
 
-        for (node in bfsNodes(root, MAX_SCAN_NODES)) {
+        for ((index, snapshotNode) in bfsSnapshotNodes(root, MAX_SCAN_NODES).withIndex()) {
+            val node = snapshotNode.node
             val text = node.text?.toString().orEmpty()
             val desc = node.contentDescription?.toString().orEmpty()
             val matchesText = !targetText.isNullOrBlank() &&
                 (text.contains(targetText, ignoreCase = true) || desc.contains(targetText, ignoreCase = true))
             val matchesViewId = !viewId.isNullOrBlank() && node.viewIdResourceName == viewId
+            val actions = scrollActions(node)
+            val includeScrollableWhenNoFilter = targetText.isNullOrBlank() && viewId.isNullOrBlank() &&
+                (node.isScrollable || actions.length() > 0)
 
-            if (!matchesText && !matchesViewId) continue
+            if (!matchesText && !matchesViewId && !includeScrollableWhenNoFilter) continue
 
-            val rect = Rect()
-            node.getBoundsInScreen(rect)
-            results.put(
-                JSONObject()
-                    .put("text", text)
-                    .put("contentDesc", desc)
-                    .put("viewId", node.viewIdResourceName.orEmpty())
-                    .put("className", node.className?.toString().orEmpty())
-                    .put("clickable", node.isClickable)
-                    .put("editable", node.isEditable)
-                    .put("scrollable", node.isScrollable)
-                    .put("bounds", JSONObject()
-                        .put("left", rect.left)
-                        .put("top", rect.top)
-                        .put("right", rect.right)
-                        .put("bottom", rect.bottom))
-            )
+            results.put(nodeToJson(node, index, snapshotNode.depth, snapshotNode.parentIndex))
             if (results.length() >= boundedLimit) break
         }
 
@@ -258,6 +224,77 @@ class McpAccessibilityService : AccessibilityService() {
         return results
     }
 
+    private fun bfsSnapshotNodes(root: AccessibilityNodeInfo, maxNodes: Int): List<SnapshotNode> {
+        val results = mutableListOf<SnapshotNode>()
+        val queue: ArrayDeque<SnapshotNode> = ArrayDeque()
+        queue.add(SnapshotNode(root, 0, -1))
+
+        while (queue.isNotEmpty() && results.size < maxNodes) {
+            val current = queue.removeFirst()
+            val currentIndex = results.size
+            results.add(current)
+            for (i in 0 until current.node.childCount) {
+                current.node.getChild(i)?.let { child ->
+                    queue.add(SnapshotNode(child, current.depth + 1, currentIndex))
+                }
+            }
+        }
+
+        return results
+    }
+
+    private fun nodeToJson(node: AccessibilityNodeInfo, index: Int, depth: Int, parentIndex: Int): JSONObject {
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+        val scrollActions = scrollActions(node)
+        val supportsHorizontal =
+            hasAction(node, AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.id) ||
+                hasAction(node, AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.id)
+        val supportsVertical =
+            hasAction(node, AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id) ||
+                hasAction(node, AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id) ||
+                hasAction(node, AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) ||
+                hasAction(node, AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+
+        return JSONObject()
+            .put("index", index)
+            .put("depth", depth)
+            .put("parentIndex", parentIndex)
+            .put("text", node.text?.toString().orEmpty())
+            .put("contentDesc", node.contentDescription?.toString().orEmpty())
+            .put("viewId", node.viewIdResourceName.orEmpty())
+            .put("className", node.className?.toString().orEmpty())
+            .put("packageName", node.packageName?.toString().orEmpty())
+            .put("clickable", node.isClickable)
+            .put("editable", node.isEditable)
+            .put("scrollable", node.isScrollable)
+            .put("enabled", node.isEnabled)
+            .put("scroll", JSONObject()
+                .put("actions", scrollActions)
+                .put("supportsHorizontal", supportsHorizontal)
+                .put("supportsVertical", supportsVertical))
+            .put("bounds", JSONObject()
+                .put("left", rect.left)
+                .put("top", rect.top)
+                .put("right", rect.right)
+                .put("bottom", rect.bottom))
+    }
+
+    private fun scrollActions(node: AccessibilityNodeInfo): JSONArray {
+        val actions = JSONArray()
+        if (hasAction(node, AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) actions.put("forward")
+        if (hasAction(node, AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)) actions.put("backward")
+        if (hasAction(node, AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id)) actions.put("up")
+        if (hasAction(node, AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id)) actions.put("down")
+        if (hasAction(node, AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.id)) actions.put("left")
+        if (hasAction(node, AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.id)) actions.put("right")
+        return actions
+    }
+
+    private fun hasAction(node: AccessibilityNodeInfo, actionId: Int): Boolean {
+        return node.actionList.any { it.id == actionId }
+    }
+
     private fun performClick(node: AccessibilityNodeInfo): Boolean {
         var current: AccessibilityNodeInfo? = node
         while (current != null) {
@@ -275,6 +312,12 @@ class McpAccessibilityService : AccessibilityService() {
 
         @Volatile
         private var instance: McpAccessibilityService? = null
+
+        private data class SnapshotNode(
+            val node: AccessibilityNodeInfo,
+            val depth: Int,
+            val parentIndex: Int,
+        )
 
         fun isConnected(): Boolean = instance != null
 
