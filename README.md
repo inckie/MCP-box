@@ -44,6 +44,7 @@ Base URL: `http://127.0.0.1:8765`
   - find nodes: `{"type":"findNodes","text":"Sign in","limit":10}`
   - tap: `{"type":"tap","x":540,"y":1200,"durationMs":120}`
   - swipe: `{"type":"swipe","x1":540,"y1":1800,"x2":540,"y2":600,"durationMs":350}`
+  - hardware button: `{"type":"hardwareButton","name":"back"}` (`menu`, `media_play_pause`, `media_next`, `media_previous`, `media_stop`)
 
 ## MCP JSON-RPC tools
 
@@ -63,6 +64,7 @@ For MCP clients (LM Studio, etc.) using `POST /` or `POST /mcp`, available tools
 - `find_nodes`
 - `tap`
 - `swipe`
+- `hardware_button`
 
 ## Quick local test (adb)
 

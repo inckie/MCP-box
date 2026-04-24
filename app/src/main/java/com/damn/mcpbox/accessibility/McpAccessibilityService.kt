@@ -3,10 +3,12 @@ package com.damn.mcpbox.accessibility
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
+import android.media.AudioManager
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.SystemClock
 import android.util.Log
+import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import org.json.JSONArray
@@ -306,6 +308,19 @@ class McpAccessibilityService : AccessibilityService() {
         return false
     }
 
+    private fun dispatchMediaKey(keyCode: Int): Boolean {
+        val audioManager = getSystemService(AudioManager::class.java) ?: return false
+        return try {
+            val down = KeyEvent(KeyEvent.ACTION_DOWN, keyCode)
+            val up = KeyEvent(KeyEvent.ACTION_UP, keyCode)
+            audioManager.dispatchMediaKeyEvent(down)
+            audioManager.dispatchMediaKeyEvent(up)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     companion object {
         private const val TAG = "McpAccessibilitySvc"
         private const val MAX_SCAN_NODES = 600
@@ -328,9 +343,31 @@ class McpAccessibilityService : AccessibilityService() {
                 "home" -> GLOBAL_ACTION_HOME
                 "recents" -> GLOBAL_ACTION_RECENTS
                 "notifications" -> GLOBAL_ACTION_NOTIFICATIONS
+                "quick_settings" -> GLOBAL_ACTION_QUICK_SETTINGS
+                "power_dialog" -> GLOBAL_ACTION_POWER_DIALOG
                 else -> return false
             }
             return service.performGlobalAction(action)
+        }
+
+        fun performHardwareButton(name: String): Boolean {
+            val service = instance ?: return false
+            return when (name.lowercase()) {
+                "back", "home", "recents", "notifications", "quick_settings", "power_dialog" -> {
+                    performGlobalActionByName(name)
+                }
+
+                // There is no universal MENU global action; use best-effort UI target.
+                "menu" -> service.clickByText("Menu") || service.clickByText("More options")
+
+                "media_play_pause", "play_pause", "toggle_playback" -> service.dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+                "media_play", "play" -> service.dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
+                "media_pause", "pause" -> service.dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
+                "media_next", "next" -> service.dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_NEXT)
+                "media_previous", "previous", "prev" -> service.dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS)
+                "media_stop", "stop" -> service.dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_STOP)
+                else -> false
+            }
         }
 
         fun clickNodeByText(text: String): Boolean {

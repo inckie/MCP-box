@@ -405,6 +405,18 @@ class McpServerService : Service() {
                             )
                     )
             )
+            .put(
+                JSONObject()
+                    .put("name", "hardware_button")
+                    .put("description", "Performs hardware-style commands: back/menu/media buttons")
+                    .put(
+                        "inputSchema",
+                        JSONObject()
+                            .put("type", "object")
+                            .put("required", JSONArray().put("name"))
+                            .put("properties", JSONObject().put("name", JSONObject().put("type", "string")))
+                    )
+            )
     }
 
     private fun handleToolCall(toolName: String, args: JSONObject): JSONObject {
@@ -506,6 +518,11 @@ class McpServerService : Service() {
                 JSONObject().put("ok", ok)
             }
 
+            "hardware_button" -> {
+                val name = args.optString("name")
+                JSONObject().put("ok", McpAccessibilityService.performHardwareButton(name)).put("name", name)
+            }
+
             else -> JSONObject().put("ok", false).put("error", "Unknown tool: $toolName")
         }
     }
@@ -600,6 +617,12 @@ class McpServerService : Service() {
                     McpAccessibilityService.swipe(x1.toFloat(), y1.toFloat(), x2.toFloat(), y2.toFloat(), durationMs)
                 }
                 httpJson(200, JSONObject().put("ok", ok))
+            }
+
+            "hardwareButton" -> {
+                val name = payload.optString("name")
+                val ok = McpAccessibilityService.performHardwareButton(name)
+                httpJson(200, JSONObject().put("ok", ok).put("name", name))
             }
 
             else -> httpJson(400, JSONObject().put("ok", false).put("error", "Unsupported action type"))
