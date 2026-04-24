@@ -27,6 +27,7 @@ class McpServerService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        AppLogger.i(TAG, "Service created; endpoint=${serverUrl()}")
         ForegroundNotificationFactory.ensureChannel(this)
         startForeground(
             NOTIFICATION_ID,
@@ -35,6 +36,7 @@ class McpServerService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        AppLogger.d(TAG, "onStartCommand action=${intent?.action} startId=$startId")
         when (intent?.action) {
             ServiceActions.ACTION_SERVER_STOP -> stopSelf()
             else -> startServerIfNeeded()
@@ -43,6 +45,7 @@ class McpServerService : Service() {
     }
 
     override fun onDestroy() {
+        AppLogger.i(TAG, "Service destroyed")
         stopServer()
         super.onDestroy()
     }
@@ -50,12 +53,16 @@ class McpServerService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun startServerIfNeeded() {
-        if (serverRunning.get()) return
+        if (serverRunning.get()) {
+            AppLogger.d(TAG, "startServerIfNeeded ignored; already running")
+            return
+        }
         serverRunning.set(true)
         serverThread = thread(name = "mcp-http-server") {
             try {
                 // Bind to all interfaces so the server is reachable from other devices on LAN.
                 ServerSocket(PORT).use { socket ->
+                    AppLogger.i(TAG, "Server listening on 0.0.0.0:$PORT")
                     serverSocket = socket
                     socket.soTimeout = ACCEPT_TIMEOUT_MS
                     while (serverRunning.get()) {
@@ -67,13 +74,15 @@ class McpServerService : Service() {
                         }
                     }
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                AppLogger.e(TAG, "Server thread failed", e)
                 serverRunning.set(false)
             }
         }
     }
 
     private fun stopServer() {
+        AppLogger.i(TAG, "Stopping server")
         serverRunning.set(false)
         serverSocket?.close()
         serverSocket = null
@@ -110,6 +119,8 @@ class McpServerService : Service() {
             } else {
                 ""
             }
+
+            AppLogger.d(TAG, "HTTP request method=$method path=$path contentLength=$contentLength")
 
             val response = route(method, path, body)
             output.write(response)
@@ -150,15 +161,11 @@ class McpServerService : Service() {
 
                 method == "POST" && path == "/launch" -> {
                     val packageName = JSONObject(body).optString("packageName")
+                    val target = JSONObject(body).optString("target").ifBlank { "main" }
                     if (packageName.isBlank()) {
                         httpJson(400, JSONObject().put("ok", false).put("error", "packageName is required"))
                     } else {
-                        startService(
-                            Intent(this, FloatingVirtualDisplayService::class.java)
-                                .setAction(ServiceActions.ACTION_LAUNCH_PACKAGE)
-                                .putExtra(ServiceActions.EXTRA_PACKAGE_NAME, packageName)
-                        )
-                        httpJson(200, JSONObject().put("ok", true).put("packageName", packageName))
+                        httpJson(200, launchPackage(packageName, target))
                     }
                 }
 
@@ -167,6 +174,7 @@ class McpServerService : Service() {
                 else -> httpText(404, "Not found")
             }
         } catch (e: Exception) {
+            AppLogger.e(TAG, "Route handling failed method=$method path=$path", e)
             httpJson(400, JSONObject().put("ok", false).put("error", e.message ?: "Unhandled error"))
         }
     }
@@ -185,6 +193,7 @@ class McpServerService : Service() {
 
         val method = request.optString("method")
         val id = request.opt("id")
+        AppLogger.d(TAG, "JSON-RPC method=$method id=$id")
         return when (method) {
             "initialize" -> {
                 val result = JSONObject()
@@ -422,12 +431,8 @@ class McpServerService : Service() {
                 if (packageName.isBlank()) {
                     JSONObject().put("ok", false).put("error", "packageName is required")
                 } else {
-                    startService(
-                        Intent(this, FloatingVirtualDisplayService::class.java)
-                            .setAction(ServiceActions.ACTION_LAUNCH_PACKAGE)
-                            .putExtra(ServiceActions.EXTRA_PACKAGE_NAME, packageName)
-                    )
-                    JSONObject().put("ok", true).put("packageName", packageName)
+                    val target = args.optString("target").ifBlank { "main" }
+                    launchPackage(packageName, target)
                 }
             }
 
@@ -527,6 +532,7 @@ class McpServerService : Service() {
 
     private fun routeAction(body: String): String {
         val payload = JSONObject(body)
+        AppLogger.d(TAG, "REST action type=${payload.optString("type")}")
         return when (payload.optString("type")) {
             "global" -> {
                 val actionName = payload.optString("name")
@@ -625,6 +631,32 @@ class McpServerService : Service() {
         return JSONObject().put("apps", JSONArray(apps))
     }
 
+    private fun launchPackage(packageName: String, target: String): JSONObject {
+        AppLogger.i(TAG, "Launch request package=$packageName target=$target")
+        return if (target.equals("virtual", ignoreCase = true)) {
+            startService(
+                Intent(this, FloatingVirtualDisplayService::class.java)
+                    .setAction(ServiceActions.ACTION_LAUNCH_PACKAGE)
+                    .putExtra(ServiceActions.EXTRA_PACKAGE_NAME, packageName)
+            )
+            JSONObject().put("ok", true).put("packageName", packageName).put("target", "virtual")
+        } else {
+            val intent = packageManager.getLaunchIntentForPackage(packageName)
+            if (intent == null) {
+                JSONObject().put("ok", false).put("error", "App is not launchable").put("packageName", packageName)
+            } else {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                try {
+                    startActivity(intent)
+                    JSONObject().put("ok", true).put("packageName", packageName).put("target", "main")
+                } catch (e: Exception) {
+                    AppLogger.e(TAG, "Failed to start package on main display package=$packageName", e)
+                    JSONObject().put("ok", false).put("error", e.message ?: "Launch failed").put("packageName", packageName)
+                }
+            }
+        }
+    }
+
     private fun httpJson(statusCode: Int, json: JSONObject): String {
         val body = json.toString()
         return buildString {
@@ -649,6 +681,7 @@ class McpServerService : Service() {
     }
 
     companion object {
+        private const val TAG = "McpServerService"
         private const val NOTIFICATION_ID = 102
         private const val PORT = 8765
         private const val MCP_SERVER_NAME = "mcp-android-http"
