@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">MCP-box</string>
+    <string name="accessibility_service_description">Allows MCP-box to perform automation actions requested via local MCP API.</string>
+    <string name="foreground_notification_title">MCP-box Services</string>
+    <string name="foreground_notification_text">Floating display and MCP server are active.</string>
+    <string name="virtual_screen_title">Virtual Screen</string>
+    <string name="close">Close</string>
+</resources>

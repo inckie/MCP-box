@@ -1,0 +1,4 @@
+<resources>
+
+    <style name="Theme.MCPbox" parent="Theme.MaterialComponents.Light" />
+</resources>
