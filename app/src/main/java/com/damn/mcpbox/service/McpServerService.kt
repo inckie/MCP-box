@@ -99,7 +99,7 @@ class McpServerService : Service() {
             val requestParts = requestLine.split(" ")
             if (requestParts.size < 2) return
 
-            val method = requestParts[0]
+            val method = requestParts[0].uppercase()
             val path = requestParts[1]
             val headers = mutableMapOf<String, String>()
             while (true) {
@@ -114,8 +114,13 @@ class McpServerService : Service() {
             val contentLength = headers["content-length"]?.toIntOrNull() ?: 0
             val body = if (contentLength > 0) {
                 val buffer = CharArray(contentLength)
-                input.read(buffer, 0, contentLength)
-                String(buffer)
+                var read = 0
+                while (read < contentLength) {
+                    val current = input.read(buffer, read, contentLength - read)
+                    if (current <= 0) break
+                    read += current
+                }
+                String(buffer, 0, read)
             } else {
                 ""
             }
@@ -132,6 +137,14 @@ class McpServerService : Service() {
         return try {
             when {
                 method == "POST" && (path == "/" || path == "/mcp") -> routeJsonRpc(body)
+
+                method == "GET" && (path == "/" || path == "/mcp" || path == "/.well-known/mcp") -> {
+                    httpJson(200, mcpServerManifest())
+                }
+
+                method == "GET" && path == "/tools" -> {
+                    httpJson(200, JSONObject().put("tools", listMcpTools()))
+                }
 
                 method == "GET" && path == "/health" -> httpJson(
                     200,
@@ -194,22 +207,29 @@ class McpServerService : Service() {
         val method = request.optString("method")
         val id = request.opt("id")
         AppLogger.d(TAG, "JSON-RPC method=$method id=$id")
+
+        if (method.isBlank()) {
+            return jsonRpcError(id, -32600, "Invalid Request")
+        }
+
         return when (method) {
             "initialize" -> {
                 val result = JSONObject()
                     .put("protocolVersion", MCP_PROTOCOL_VERSION)
-                    .put("capabilities", JSONObject().put("tools", JSONObject()))
+                    .put("capabilities", JSONObject().put("tools", JSONObject().put("listChanged", false)))
                     .put("serverInfo", JSONObject().put("name", MCP_SERVER_NAME).put("version", MCP_SERVER_VERSION))
                 jsonRpcSuccess(id, result)
             }
 
             "notifications/initialized" -> {
                 if (id == null) {
-                    httpText(200, "")
+                    httpNoContent(204)
                 } else {
                     jsonRpcSuccess(id, JSONObject())
                 }
             }
+
+            "ping" -> jsonRpcSuccess(id, JSONObject())
 
             "tools/list" -> {
                 val result = JSONObject().put("tools", listMcpTools())
@@ -527,6 +547,17 @@ class McpServerService : Service() {
         }
     }
 
+    private fun mcpServerManifest(): JSONObject {
+        return JSONObject()
+            .put("name", MCP_SERVER_NAME)
+            .put("version", MCP_SERVER_VERSION)
+            .put("protocolVersion", MCP_PROTOCOL_VERSION)
+            .put("transport", "http")
+            .put("jsonRpcEndpoint", "/mcp")
+            .put("capabilities", JSONObject().put("tools", JSONObject().put("listChanged", false)))
+            .put("tools", listMcpTools())
+    }
+
     private fun jsonRpcSuccess(id: Any?, result: JSONObject): String {
         return httpJson(
             200,
@@ -700,6 +731,13 @@ class McpServerService : Service() {
             append("Content-Length: ${message.toByteArray().size}\r\n")
             append("Connection: close\r\n\r\n")
             append(message)
+        }
+    }
+
+    private fun httpNoContent(statusCode: Int = 204): String {
+        return buildString {
+            append("HTTP/1.1 $statusCode No Content\r\n")
+            append("Connection: close\r\n\r\n")
         }
     }
 

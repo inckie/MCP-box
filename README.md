@@ -29,6 +29,10 @@ Launching third-party apps into a custom virtual display is restricted on many A
 
 Base URL: `http://127.0.0.1:8765`
 
+- `GET /` (MCP manifest/discovery JSON)
+- `GET /mcp` (same MCP manifest/discovery JSON)
+- `GET /.well-known/mcp` (same MCP manifest/discovery JSON)
+- `GET /tools` (tool list JSON)
 - `GET /health`
 - `GET /apps`
 - `POST /overlay/show`
@@ -65,6 +69,12 @@ For MCP clients (LM Studio, etc.) using `POST /` or `POST /mcp`, available tools
 - `tap`
 - `swipe`
 - `hardware_button`
+
+JSON-RPC notes:
+
+- `initialize` returns `protocolVersion`, `serverInfo`, and `capabilities.tools.listChanged`
+- `notifications/initialized` (without `id`) returns HTTP `204 No Content`
+- `ping` is supported and returns an empty JSON object
 
 ## Quick local test (adb)
 
