@@ -1,12 +1,16 @@
 package com.damn.mcpbox.service
 
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import androidx.core.app.NotificationCompat
 import com.damn.mcpbox.accessibility.McpAccessibilityService
+import com.damn.mcpbox.mcp.McpPluginManager
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -21,11 +25,16 @@ import java.net.SocketTimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
-class McpServerService : Service() {
+class McpServerService : Service(), McpPluginManager.PermissionRequester {
     private var serverSocket: ServerSocket? = null
     private var serverThread: Thread? = null
     private val serverRunning = AtomicBoolean(false)
     private var wakeLock: PowerManager.WakeLock? = null
+    private val pluginManager by lazy { 
+        McpPluginManager(this).also { it.permissionRequester = this }
+    }
+
+    private var isAppInForeground = false
 
     override fun onCreate() {
         super.onCreate()
@@ -44,6 +53,14 @@ class McpServerService : Service() {
             ServiceActions.ACTION_SET_KEEP_SCREEN_ON -> {
                 val enabled = intent.getBooleanExtra(ServiceActions.EXTRA_ENABLED, false)
                 setKeepScreenOn(enabled)
+            }
+            ServiceActions.ACTION_PERMISSION_DECISION -> {
+                val requestId = intent.getIntExtra(ServiceActions.EXTRA_REQUEST_ID, -1)
+                val decision = intent.getBooleanExtra(ServiceActions.EXTRA_DECISION, false)
+                pluginManager.onPermissionDecision(requestId, decision)
+                
+                // Cancel notification if it was used
+                (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(requestId + 1000)
             }
             else -> {
                 val prefs = getSharedPreferences(ServiceActions.PREFS_NAME, MODE_PRIVATE)
@@ -261,8 +278,18 @@ class McpServerService : Service() {
             "ping" -> jsonRpcSuccess(id, JSONObject())
 
             "tools/list" -> {
-                val result = JSONObject().put("tools", listMcpTools())
-                jsonRpcSuccess(id, result)
+                val tools = JSONArray()
+                pluginManager.getEnabledPlugins().forEach { plugin ->
+                    plugin.getTools().forEach { tool ->
+                        tools.put(
+                            JSONObject()
+                                .put("name", "${plugin.id}/${tool.name}")
+                                .put("description", tool.description)
+                                .put("inputSchema", tool.inputSchema)
+                        )
+                    }
+                }
+                jsonRpcSuccess(id, JSONObject().put("tools", tools))
             }
 
             "resources/list" -> {
@@ -284,9 +311,25 @@ class McpServerService : Service() {
 
             "tools/call" -> {
                 val params = request.optJSONObject("params") ?: JSONObject()
-                val toolName = params.optString("name")
+                val fullName = params.optString("name")
+                val parts = fullName.split("/", limit = 2)
+                if (parts.size != 2) {
+                    return jsonRpcError(id, -32602, "Invalid tool name format. Expected pluginId/toolName")
+                }
+                val pluginId = parts[0]
+                val toolName = parts[1]
+
+                if (!pluginManager.checkAndRequestPermission(pluginId, toolName)) {
+                    return jsonRpcError(id, -32000, "Tool execution blocked by user or permission settings")
+                }
+
+                val tool = pluginManager.getTool(pluginId, toolName)
+                if (tool == null) {
+                    return jsonRpcError(id, -32601, "Tool not found: $fullName")
+                }
+
                 val args = params.optJSONObject("arguments") ?: JSONObject()
-                val toolResult = handleToolCall(toolName, args)
+                val toolResult = tool.call(this, args)
                 val result = JSONObject().put("content", JSONArray().put(JSONObject().put("type", "text").put("text", toolResult.toString())))
                 jsonRpcSuccess(id, result)
             }
@@ -612,6 +655,50 @@ class McpServerService : Service() {
 
             else -> JSONObject().put("ok", false).put("error", "Unknown tool: $toolName")
         }
+    }
+
+    override fun requestPermission(requestId: Int, pluginId: String, toolName: String) {
+        AppLogger.i(TAG, "Requesting permission for $pluginId/$toolName (id=$requestId)")
+        
+        // Broadcast for the Activity to pick up if it's in foreground
+        val intent = Intent(ServiceActions.ACTION_PERMISSION_DECISION)
+            .putExtra(ServiceActions.EXTRA_REQUEST_ID, requestId)
+            .putExtra(ServiceActions.EXTRA_PLUGIN_ID, pluginId)
+            .putExtra(ServiceActions.EXTRA_TOOL_NAME, toolName)
+        sendBroadcast(intent)
+
+        // Also show notification with buttons for background state
+        showPermissionNotification(requestId, pluginId, toolName)
+    }
+
+    private fun showPermissionNotification(requestId: Int, pluginId: String, toolName: String) {
+        val allowIntent = Intent(this, McpServerService::class.java).apply {
+            action = ServiceActions.ACTION_PERMISSION_DECISION
+            putExtra(ServiceActions.EXTRA_REQUEST_ID, requestId)
+            putExtra(ServiceActions.EXTRA_DECISION, true)
+        }
+        val denyIntent = Intent(this, McpServerService::class.java).apply {
+            action = ServiceActions.ACTION_PERMISSION_DECISION
+            putExtra(ServiceActions.EXTRA_REQUEST_ID, requestId)
+            putExtra(ServiceActions.EXTRA_DECISION, false)
+        }
+
+        val flag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT else PendingIntent.FLAG_UPDATE_CURRENT
+        
+        val allowPending = PendingIntent.getService(this, requestId * 2, allowIntent, flag)
+        val denyPending = PendingIntent.getService(this, requestId * 2 + 1, denyIntent, flag)
+
+        val notification = NotificationCompat.Builder(this, ForegroundNotificationFactory.CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("MCP Tool Request")
+            .setContentText("Allow $pluginId/$toolName?")
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setAutoCancel(true)
+            .addAction(0, "Allow", allowPending)
+            .addAction(0, "Deny", denyPending)
+            .build()
+
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(requestId + 1000, notification)
     }
 
     private fun mcpServerManifest(): JSONObject {

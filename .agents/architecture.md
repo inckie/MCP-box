@@ -13,7 +13,13 @@ Primary goal: select installed apps and attempt to launch them on a virtual disp
 - `app/src/main/java/com/damn/mcpbox/MainActivity.kt`
   - Compose controller screen.
   - Starts/stops core services.
-  - Shows app picker and sends launch requests.
+  - MCP Plugin & Tool management UI (permissions, enable/disable).
+- `app/src/main/java/com/damn/mcpbox/mcp/`
+  - `McpCore.kt`: Plugin/Tool interfaces and Permission enums.
+  - `McpPluginManager.kt`: Registry and execution coordinator.
+  - `McpConfigManager.kt`: Persistent storage for plugin/tool settings.
+- `app/src/main/java/com/damn/mcpbox/mcp/plugins/`
+  - Modular plugin implementations (Accessibility, Contacts, Calendar, Media, SMS, Settings).
 - `app/src/main/java/com/damn/mcpbox/service/FloatingVirtualDisplayService.kt`
   - Foreground service hosting draggable overlay (`WindowManager`).
   - Creates `VirtualDisplay` on `SurfaceView` surface.
@@ -42,27 +48,26 @@ Primary goal: select installed apps and attempt to launch them on a virtual disp
 Base URL: `http://127.0.0.1:8765`
 
 - `GET /health`
-  - Returns service health and accessibility connection state.
-- `GET /apps`
-  - Returns launchable apps (`label`, `packageName`).
-- `POST /overlay/show`
-  - Shows draggable floating screen.
-- `POST /overlay/hide`
-  - Hides floating screen.
-- `POST /launch`
-  - Body: `{ "packageName": "com.example.app" }`.
-  - Requests launch on virtual display.
-- `POST /action`
-  - Global action: `{ "type": "global", "name": "back" }`.
-  - Click text: `{ "type": "clickText", "text": "Allow" }`.
+  - Returns service health, accessibility state, and screenshot support.
+- `GET /tools`
+  - Returns dynamic tool list from enabled plugins (namespaced as `pluginId/toolName`).
+- `POST /` or `POST /mcp`
+  - MCP JSON-RPC 2.0 endpoint (supports `initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`).
+
+## Plugin Development (Skill)
+To add a new plugin:
+1. Implement `McpPlugin` interface in `com.damn.mcpbox.mcp.plugins`.
+2. Define `requiredPermissions` (Android runtime permissions).
+3. Implement `McpTool` classes for each functionality.
+4. Register the plugin in `McpPluginManager.init {}`.
+5. Update `AndroidManifest.xml` with any new permissions or features.
 
 ## Permissions and Manifest Dependencies
 Defined in `app/src/main/AndroidManifest.xml`:
-- `android.permission.INTERNET`
-- `android.permission.SYSTEM_ALERT_WINDOW`
-- `android.permission.FOREGROUND_SERVICE`
-- `android.permission.FOREGROUND_SERVICE_DATA_SYNC`
+- `android.permission.INTERNET`, `SYSTEM_ALERT_WINDOW`, `WAKE_LOCK`
+- `android.permission.FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC`
 - `android.permission.POST_NOTIFICATIONS`
+- Runtime Permissions: `READ_CONTACTS`, `READ_CALENDAR`, `READ_SMS`, `READ_EXTERNAL_STORAGE`, `READ_MEDIA_*`
 - Accessibility service binding: `android.permission.BIND_ACCESSIBILITY_SERVICE`
 - Package visibility query for launcher activities.
 

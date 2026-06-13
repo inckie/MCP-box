@@ -11,7 +11,15 @@ Android prototype that:
 - App picker in `MainActivity`
 - Floating virtual screen service: `FloatingVirtualDisplayService`
 - Local MCP server service: `McpServerService`
-- Accessibility automation bridge: `McpAccessibilityService`
+- Modular MCP Plugin System:
+    - **Accessibility**: UI automation (clicks, scrolls, snapshots, gestures).
+    - **Contacts**: List device contacts.
+    - **Calendar**: List calendar events.
+    - **Media**: List photos, videos, and audio files.
+    - **SMS**: List and search text messages.
+    - **Settings**: Device info and battery status.
+- UI Management: Toggle plugins and set per-tool permissions (Allow, Ask, Block).
+- Support for MCP Resources: `screenshot://current`.
 
 ## Important platform note
 
@@ -32,43 +40,29 @@ Base URL: `http://127.0.0.1:8765`
 - `GET /` (MCP manifest/discovery JSON)
 - `GET /mcp` (same MCP manifest/discovery JSON)
 - `GET /.well-known/mcp` (same MCP manifest/discovery JSON)
-- `GET /tools` (tool list JSON)
+- `POST /mcp` (JSON-RPC 2.0 endpoint)
 - `GET /health`
 - `GET /apps`
 - `POST /overlay/show`
 - `POST /overlay/hide`
 - `POST /launch` with JSON body: `{"packageName":"com.example.app"}`
-- `POST /action` with JSON body:
-  - global action: `{"type":"global","name":"back"}` (`home`, `recents`, `notifications`)
-  - click text: `{"type":"clickText","text":"Allow"}`
-  - click by view id: `{"type":"clickViewId","viewId":"com.example:id/button_ok"}`
-  - set text: `{"type":"setText","viewId":"com.example:id/input","value":"hello"}`
-  - scroll: `{"type":"scroll","direction":"forward","viewId":"com.example:id/list"}`
-  - UI snapshot: `{"type":"uiSnapshot","maxNodes":120}`
-  - find nodes: `{"type":"findNodes","text":"Sign in","limit":10}`
-  - tap: `{"type":"tap","x":540,"y":1200,"durationMs":120}`
-  - swipe: `{"type":"swipe","x1":540,"y1":1800,"x2":540,"y2":600,"durationMs":350}`
-  - hardware button: `{"type":"hardwareButton","name":"back"}` (`menu`, `media_play_pause`, `media_next`, `media_previous`, `media_stop`)
+- `POST /action` (Legacy REST actions for accessibility)
 
-## MCP JSON-RPC tools
+## MCP JSON-RPC Tools & Resources
 
-For MCP clients (LM Studio, etc.) using `POST /` or `POST /mcp`, available tools include:
+Tools are dynamically registered from enabled plugins and follow the `pluginId/toolName` naming convention.
 
-- `health`
-- `list_apps`
-- `overlay_show`
-- `overlay_hide`
-- `launch`
-- `global_action`
-- `click_text`
-- `click_view_id`
-- `set_text`
-- `scroll`
-- `ui_snapshot`
-- `find_nodes`
-- `tap`
-- `swipe`
-- `hardware_button`
+### Available Resources
+- `screenshot://current`: Real-time PNG screenshot (Android 11+).
+
+### Available Tools (by Plugin)
+- **accessibility/**: `health`, `global_action`, `click_text`, `click_view_id`, `set_text`, `scroll`, `ui_snapshot`, `find_nodes`, `tap`, `swipe`, `hardware_button`
+- **contacts/**: `list`
+- **calendar/**: `list_events`
+- **media/**: `list_images`, `list_videos`, `list_audio`
+- **sms/**: `list_messages`, `search_messages`
+- **settings/**: `get_device_info`, `get_battery_status`
+- **server/**: `keep_screen_on`
 
 JSON-RPC notes:
 
