@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import com.damn.mcpbox.accessibility.McpAccessibilityService
 import org.json.JSONArray
 import org.json.JSONObject
@@ -24,6 +25,7 @@ class McpServerService : Service() {
     private var serverSocket: ServerSocket? = null
     private var serverThread: Thread? = null
     private val serverRunning = AtomicBoolean(false)
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -39,13 +41,23 @@ class McpServerService : Service() {
         AppLogger.d(TAG, "onStartCommand action=${intent?.action} startId=$startId")
         when (intent?.action) {
             ServiceActions.ACTION_SERVER_STOP -> stopSelf()
-            else -> startServerIfNeeded()
+            ServiceActions.ACTION_SET_KEEP_SCREEN_ON -> {
+                val enabled = intent.getBooleanExtra(ServiceActions.EXTRA_ENABLED, false)
+                setKeepScreenOn(enabled)
+            }
+            else -> {
+                val prefs = getSharedPreferences(ServiceActions.PREFS_NAME, MODE_PRIVATE)
+                val enabled = prefs.getBoolean(ServiceActions.PREF_KEEP_SCREEN_ON, false)
+                setKeepScreenOn(enabled)
+                startServerIfNeeded()
+            }
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
         AppLogger.i(TAG, "Service destroyed")
+        setKeepScreenOn(false)
         stopServer()
         super.onDestroy()
     }
@@ -88,6 +100,29 @@ class McpServerService : Service() {
         serverSocket = null
         serverThread?.interrupt()
         serverThread = null
+    }
+
+    private fun setKeepScreenOn(enabled: Boolean) {
+        if (enabled) {
+            if (wakeLock == null) {
+                val pm = getSystemService(POWER_SERVICE) as PowerManager
+                @Suppress("DEPRECATION")
+                wakeLock = pm.newWakeLock(
+                    PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                    "McpBox::KeepScreenOn"
+                )
+            }
+            if (wakeLock?.isHeld == false) {
+                wakeLock?.acquire()
+                AppLogger.i(TAG, "WakeLock acquired")
+            }
+        } else {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                AppLogger.i(TAG, "WakeLock released")
+            }
+            wakeLock = null
+        }
     }
 
     private fun handleClient(client: Socket) {
@@ -135,44 +170,37 @@ class McpServerService : Service() {
 
     private fun route(method: String, path: String, body: String): String {
         return try {
-            when {
-                method == "POST" && (path == "/" || path == "/mcp") -> routeJsonRpc(body)
-
-                method == "GET" && (path == "/" || path == "/mcp" || path == "/.well-known/mcp") -> {
+            when (method) {
+                "POST" if (path == "/" || path == "/mcp") -> routeJsonRpc(body)
+                "GET" if (path == "/" || path == "/mcp" || path == "/.well-known/mcp") -> {
                     httpJson(200, mcpServerManifest())
                 }
-
-                method == "GET" && path == "/tools" -> {
+                "GET" if path == "/tools" -> {
                     httpJson(200, JSONObject().put("tools", listMcpTools()))
                 }
-
-                method == "GET" && path == "/health" -> httpJson(
+                "GET" if path == "/health" -> httpJson(
                     200,
                     JSONObject()
                         .put("ok", true)
                         .put("serverUrl", serverUrl())
                         .put("accessibilityConnected", McpAccessibilityService.isConnected())
                 )
-
-                method == "GET" && path == "/apps" -> httpJson(200, listApps())
-
-                method == "POST" && path == "/overlay/show" -> {
+                "GET" if path == "/apps" -> httpJson(200, listApps())
+                "POST" if path == "/overlay/show" -> {
                     startService(
                         Intent(this, FloatingVirtualDisplayService::class.java)
                             .setAction(ServiceActions.ACTION_SHOW_OVERLAY)
                     )
                     httpJson(200, JSONObject().put("ok", true))
                 }
-
-                method == "POST" && path == "/overlay/hide" -> {
+                "POST" if path == "/overlay/hide" -> {
                     startService(
                         Intent(this, FloatingVirtualDisplayService::class.java)
                             .setAction(ServiceActions.ACTION_HIDE_OVERLAY)
                     )
                     httpJson(200, JSONObject().put("ok", true))
                 }
-
-                method == "POST" && path == "/launch" -> {
+                "POST" if path == "/launch" -> {
                     val packageName = JSONObject(body).optString("packageName")
                     val target = JSONObject(body).optString("target").ifBlank { "main" }
                     if (packageName.isBlank()) {
@@ -181,9 +209,7 @@ class McpServerService : Service() {
                         httpJson(200, launchPackage(packageName, target))
                     }
                 }
-
-                method == "POST" && path == "/action" -> routeAction(body)
-
+                "POST" if path == "/action" -> routeAction(body)
                 else -> httpText(404, "Not found")
             }
         } catch (e: Exception) {
@@ -216,7 +242,10 @@ class McpServerService : Service() {
             "initialize" -> {
                 val result = JSONObject()
                     .put("protocolVersion", MCP_PROTOCOL_VERSION)
-                    .put("capabilities", JSONObject().put("tools", JSONObject().put("listChanged", false)))
+                    .put("capabilities", JSONObject()
+                        .put("tools", JSONObject().put("listChanged", false))
+                        .put("resources", JSONObject().put("subscribe", false).put("listChanged", false))
+                    )
                     .put("serverInfo", JSONObject().put("name", MCP_SERVER_NAME).put("version", MCP_SERVER_VERSION))
                 jsonRpcSuccess(id, result)
             }
@@ -234,6 +263,23 @@ class McpServerService : Service() {
             "tools/list" -> {
                 val result = JSONObject().put("tools", listMcpTools())
                 jsonRpcSuccess(id, result)
+            }
+
+            "resources/list" -> {
+                val result = JSONObject().put("resources", listMcpResources())
+                jsonRpcSuccess(id, result)
+            }
+
+            "resources/read" -> {
+                val params = request.optJSONObject("params") ?: JSONObject()
+                val uri = params.optString("uri")
+                val contents = handleResourceRead(uri)
+                if (contents == null) {
+                    jsonRpcError(id, -32602, "Invalid URI or failed to read")
+                } else {
+                    val result = JSONObject().put("contents", contents)
+                    jsonRpcSuccess(id, result)
+                }
             }
 
             "tools/call" -> {
@@ -437,6 +483,18 @@ class McpServerService : Service() {
                             .put("properties", JSONObject().put("name", JSONObject().put("type", "string")))
                     )
             )
+            .put(
+                JSONObject()
+                    .put("name", "keep_screen_on")
+                    .put("description", "Keeps the screen on or allows it to turn off")
+                    .put(
+                        "inputSchema",
+                        JSONObject()
+                            .put("type", "object")
+                            .put("required", JSONArray().put("enabled"))
+                            .put("properties", JSONObject().put("enabled", JSONObject().put("type", "boolean")))
+                    )
+            )
     }
 
     private fun handleToolCall(toolName: String, args: JSONObject): JSONObject {
@@ -445,6 +503,7 @@ class McpServerService : Service() {
                 .put("ok", true)
                 .put("serverUrl", serverUrl())
                 .put("accessibilityConnected", McpAccessibilityService.isConnected())
+                .put("screenshotSupported", Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
 
             "list_apps" -> listApps()
 
@@ -543,6 +602,14 @@ class McpServerService : Service() {
                 JSONObject().put("ok", McpAccessibilityService.performHardwareButton(name)).put("name", name)
             }
 
+            "keep_screen_on" -> {
+                val enabled = args.optBoolean("enabled")
+                val prefs = getSharedPreferences(ServiceActions.PREFS_NAME, MODE_PRIVATE)
+                prefs.edit().putBoolean(ServiceActions.PREF_KEEP_SCREEN_ON, enabled).apply()
+                setKeepScreenOn(enabled)
+                JSONObject().put("ok", true).put("enabled", enabled)
+            }
+
             else -> JSONObject().put("ok", false).put("error", "Unknown tool: $toolName")
         }
     }
@@ -554,8 +621,41 @@ class McpServerService : Service() {
             .put("protocolVersion", MCP_PROTOCOL_VERSION)
             .put("transport", "http")
             .put("jsonRpcEndpoint", "/mcp")
-            .put("capabilities", JSONObject().put("tools", JSONObject().put("listChanged", false)))
+            .put("capabilities", JSONObject()
+                .put("tools", JSONObject().put("listChanged", false))
+                .put("resources", JSONObject().put("subscribe", false).put("listChanged", false))
+            )
             .put("tools", listMcpTools())
+            .put("resources", listMcpResources())
+    }
+
+    private fun listMcpResources(): JSONArray {
+        val resources = JSONArray()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            resources.put(
+                JSONObject()
+                    .put("uri", "screenshot://current")
+                    .put("name", "Current screen screenshot")
+                    .put("mimeType", "image/png")
+                    .put("description", "A real-time screenshot of the current screen")
+            )
+        }
+        return resources
+    }
+
+    private fun handleResourceRead(uri: String): JSONArray? {
+        if (uri == "screenshot://current") {
+            val base64 = McpAccessibilityService.takeScreenshot()
+            if (base64 != null) {
+                return JSONArray().put(
+                    JSONObject()
+                        .put("uri", uri)
+                        .put("mimeType", "image/png")
+                        .put("blob", base64)
+                )
+            }
+        }
+        return null
     }
 
     private fun jsonRpcSuccess(id: Any?, result: JSONObject): String {

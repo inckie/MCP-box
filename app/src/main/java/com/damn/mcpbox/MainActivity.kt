@@ -58,11 +58,15 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun HomeScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences(ServiceActions.PREFS_NAME, android.content.Context.MODE_PRIVATE) }
     val apps = remember { loadLaunchableApps(context.packageManager) }
     var showPicker by remember { mutableStateOf(false) }
     var selectedApp by remember { mutableStateOf<LauncherApp?>(null) }
     var serverStarted by remember { mutableStateOf(false) }
     var virtualDisplayEnabled by remember { mutableStateOf(false) }
+    var keepScreenOn by remember {
+        mutableStateOf(prefs.getBoolean(ServiceActions.PREF_KEEP_SCREEN_ON, false))
+    }
 
     Column(
         modifier = modifier
@@ -80,6 +84,25 @@ private fun HomeScreen(modifier: Modifier = Modifier) {
             context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }) {
             Text("Open Accessibility Settings")
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("Keep Screen On")
+            Switch(
+                checked = keepScreenOn,
+                onCheckedChange = { enabled ->
+                    keepScreenOn = enabled
+                    prefs.edit().putBoolean(ServiceActions.PREF_KEEP_SCREEN_ON, enabled).apply()
+                    context.startService(
+                        Intent(context, McpServerService::class.java)
+                            .setAction(ServiceActions.ACTION_SET_KEEP_SCREEN_ON)
+                            .putExtra(ServiceActions.EXTRA_ENABLED, enabled)
+                    )
+                }
+            )
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

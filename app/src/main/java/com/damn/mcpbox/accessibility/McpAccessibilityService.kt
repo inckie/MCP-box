@@ -3,16 +3,20 @@ package com.damn.mcpbox.accessibility
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
-import android.media.AudioManager
+import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.Rect
+import android.media.AudioManager
+import android.os.Build
 import android.os.SystemClock
 import android.util.Log
+import android.view.Display
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.util.ArrayDeque
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -321,6 +325,38 @@ class McpAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun takeScreenshot(): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+
+        val latch = CountDownLatch(1)
+        var base64: String? = null
+
+        takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+            override fun onSuccess(screenshot: ScreenshotResult) {
+                try {
+                    val bitmap = Bitmap.wrapHardwareBuffer(screenshot.hardwareBuffer, screenshot.colorSpace)
+                    if (bitmap != null) {
+                        val outputStream = ByteArrayOutputStream()
+                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
+                        base64 = android.util.Base64.encodeToString(outputStream.toByteArray(), android.util.Base64.NO_WRAP)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to process screenshot", e)
+                } finally {
+                    latch.countDown()
+                }
+            }
+
+            override fun onFailure(errorCode: Int) {
+                Log.e(TAG, "Failed to take screenshot: $errorCode")
+                latch.countDown()
+            }
+        })
+
+        latch.await(5, TimeUnit.SECONDS)
+        return base64
+    }
+
     companion object {
         private const val TAG = "McpAccessibilitySvc"
         private const val MAX_SCAN_NODES = 600
@@ -412,6 +448,10 @@ class McpAccessibilityService : AccessibilityService() {
         fun swipe(x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long): Boolean {
             val service = instance ?: return false
             return service.swipe(x1, y1, x2, y2, durationMs)
+        }
+
+        fun takeScreenshot(): String? {
+            return instance?.takeScreenshot()
         }
     }
 }
