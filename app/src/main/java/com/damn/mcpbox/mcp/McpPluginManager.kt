@@ -7,6 +7,7 @@ import com.damn.mcpbox.mcp.plugins.ContactsPlugin
 import com.damn.mcpbox.mcp.plugins.MediaPlugin
 import com.damn.mcpbox.mcp.plugins.SmsPlugin
 import com.damn.mcpbox.mcp.plugins.SettingsPlugin
+import com.damn.mcpbox.mcp.plugins.SystemPlugin
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -32,6 +33,7 @@ class McpPluginManager(private val context: Context) {
         registerPlugin(MediaPlugin())
         registerPlugin(SmsPlugin())
         registerPlugin(SettingsPlugin())
+        registerPlugin(SystemPlugin())
     }
 
     private fun registerPlugin(plugin: McpPlugin) {
