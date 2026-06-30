@@ -9,6 +9,8 @@ import com.damn.mcpbox.service.FloatingVirtualDisplayService
 import com.damn.mcpbox.service.ServiceActions
 import org.json.JSONArray
 import org.json.JSONObject
+import androidx.core.content.edit
+import androidx.core.net.toUri
 
 class SystemPlugin : McpPlugin {
     override val id: String = "system"
@@ -20,6 +22,7 @@ class SystemPlugin : McpPlugin {
         OverlayHideTool(),
         ListAppsTool(),
         LaunchTool(),
+        SendIntentTool(),
         KeepScreenOnTool()
     )
 
@@ -133,6 +136,53 @@ class SystemPlugin : McpPlugin {
         }
     }
 
+    class SendIntentTool : McpTool {
+        override val name: String = "send_intent"
+        override val description: String = "Sends an Android intent to an app or URL scheme"
+        override val inputSchema: JSONObject = JSONObject()
+            .put("type", "object")
+            .put("properties", JSONObject()
+                .put("action", JSONObject().put("type", "string").put("description", "Intent action, e.g. 'android.intent.action.VIEW'"))
+                .put("uri", JSONObject().put("type", "string").put("description", "URI/URL scheme, e.g. 'https://google.com' or 'geo:0,0'"))
+                .put("packageName", JSONObject().put("type", "string").put("description", "Target package name"))
+                .put("className", JSONObject().put("type", "string").put("description", "Target class name"))
+                .put("extras", JSONObject().put("type", "object").put("description", "Key-value pairs for intent extras")))
+
+        override fun call(context: Context, arguments: JSONObject): JSONObject {
+            try {
+                val action = arguments.optString("action", Intent.ACTION_VIEW).ifBlank { Intent.ACTION_VIEW }
+                val uriStr = arguments.optString("uri").ifBlank { null }
+                val packageName = arguments.optString("packageName").ifBlank { null }
+                val className = arguments.optString("className").ifBlank { null }
+                val extras = arguments.optJSONObject("extras")
+
+                val intent = Intent(action)
+                uriStr?.let { intent.data = it.toUri() }
+                packageName?.let { intent.`package` = it }
+                if (packageName != null && className != null) {
+                    intent.setClassName(packageName, className)
+                }
+
+                extras?.keys()?.forEach { key ->
+                    val value = extras.get(key)
+                    when (value) {
+                        is String -> intent.putExtra(key, value)
+                        is Int -> intent.putExtra(key, value)
+                        is Boolean -> intent.putExtra(key, value)
+                        is Double -> intent.putExtra(key, value)
+                        is Long -> intent.putExtra(key, value)
+                    }
+                }
+
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent)
+                return JSONObject().put("ok", true)
+            } catch (e: Exception) {
+                return JSONObject().put("ok", false).put("error", e.message)
+            }
+        }
+    }
+
     class KeepScreenOnTool : McpTool {
         override val name: String = "keep_screen_on"
         override val description: String = "Keeps the screen on or allows it to turn off"
@@ -144,7 +194,7 @@ class SystemPlugin : McpPlugin {
         override fun call(context: Context, arguments: JSONObject): JSONObject {
             val enabled = arguments.optBoolean("enabled")
             val prefs = context.getSharedPreferences(ServiceActions.PREFS_NAME, Context.MODE_PRIVATE)
-            prefs.edit().putBoolean(ServiceActions.PREF_KEEP_SCREEN_ON, enabled).apply()
+            prefs.edit { putBoolean(ServiceActions.PREF_KEEP_SCREEN_ON, enabled) }
 
             val intent = Intent(context, com.damn.mcpbox.service.McpServerService::class.java)
                 .setAction(ServiceActions.ACTION_SET_KEEP_SCREEN_ON)
