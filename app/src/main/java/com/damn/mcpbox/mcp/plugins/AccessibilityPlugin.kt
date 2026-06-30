@@ -47,9 +47,32 @@ class AccessibilityPlugin : McpPlugin {
         override val inputSchema: JSONObject = JSONObject().put("type", "object").put("properties", JSONObject())
 
         override fun call(context: Context, arguments: JSONObject): JSONObject {
-            // This would call the app listing logic
-            // For now, returning empty to be implemented
-            return JSONObject().put("apps", JSONArray())
+            val pm = context.packageManager
+            val mainIntent = android.content.Intent(android.content.Intent.ACTION_MAIN, null).apply {
+                addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+            }
+
+            val resolveInfos = pm.queryIntentActivities(mainIntent, 0)
+            val apps = JSONArray()
+
+            for (info in resolveInfos) {
+                val packageName = info.activityInfo.packageName
+                val label = info.loadLabel(pm).toString()
+                var version = "unknown"
+                try {
+                    val packageInfo = pm.getPackageInfo(packageName, 0)
+                    version = packageInfo.versionName ?: "unknown"
+                } catch (_: Exception) {
+                    // Ignore
+                }
+
+                apps.put(JSONObject()
+                    .put("name", label)
+                    .put("bundle", packageName)
+                    .put("version", version))
+            }
+
+            return JSONObject().put("apps", apps)
         }
     }
 
