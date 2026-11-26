@@ -3,6 +3,7 @@ package com.damn.mcpbox.service
 import android.app.ActivityOptions
 import android.app.ActivityManager
 import android.app.ForegroundServiceStartNotAllowedException
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -39,7 +40,17 @@ class FloatingVirtualDisplayService : Service() {
         Log.i(TAG, "Service created")
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         ForegroundNotificationFactory.ensureChannel(this)
-        val notification = ForegroundNotificationFactory.build(this, getString(R.string.foreground_notification_text))
+        val stopIntent = PendingIntent.getService(
+            this,
+            STOP_REQUEST_CODE,
+            Intent(this, FloatingVirtualDisplayService::class.java).setAction(ServiceActions.ACTION_HIDE_OVERLAY),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = ForegroundNotificationFactory.build(
+            this,
+            getString(R.string.foreground_notification_text),
+            stopIntent = stopIntent
+        )
         val foregroundServiceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         } else {
@@ -333,6 +344,7 @@ class FloatingVirtualDisplayService : Service() {
     companion object {
         private const val TAG = "FloatVirtualDisplay"
         private const val NOTIFICATION_ID = 101
+        private const val STOP_REQUEST_CODE = 101
     }
 }
 

@@ -5,4 +5,5 @@
     <string name="foreground_notification_text">Floating display and MCP server are active.</string>
     <string name="virtual_screen_title">Virtual Screen</string>
     <string name="close">Close</string>
+    <string name="stop">Stop</string>
 </resources>

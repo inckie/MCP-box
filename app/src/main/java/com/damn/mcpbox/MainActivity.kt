@@ -38,6 +38,7 @@ import com.damn.mcpbox.mcp.McpConfigManager
 import com.damn.mcpbox.mcp.McpPluginManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -78,7 +79,7 @@ private fun HomeScreen(modifier: Modifier = Modifier) {
     val apps = remember { loadLaunchableApps(context.packageManager) }
     var showPicker by remember { mutableStateOf(false) }
     var selectedApp by remember { mutableStateOf<LauncherApp?>(null) }
-    var serverStarted by remember { mutableStateOf(false) }
+    val serverStarted by McpServerService.isRunning.collectAsState()
     var virtualDisplayEnabled by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var keepScreenOn by remember {
@@ -166,7 +167,6 @@ private fun HomeScreen(modifier: Modifier = Modifier) {
                     } else {
                         context.stopService(Intent(context, McpServerService::class.java))
                     }
-                    serverStarted = enabled
                 }
             )
             androidx.compose.foundation.layout.Spacer(Modifier.padding(horizontal = 4.dp))

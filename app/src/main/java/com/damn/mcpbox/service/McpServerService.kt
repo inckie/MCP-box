@@ -25,6 +25,9 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlin.concurrent.thread
 
 class McpServerService : Service(), McpPluginManager.PermissionRequester {
@@ -40,7 +43,17 @@ class McpServerService : Service(), McpPluginManager.PermissionRequester {
         super.onCreate()
         AppLogger.i(TAG, "Service created; endpoint=${serverUrl()}")
         ForegroundNotificationFactory.ensureChannel(this)
-        val notification = ForegroundNotificationFactory.build(this, "MCP API available at ${serverUrl()}")
+        val stopIntent = PendingIntent.getService(
+            this,
+            STOP_REQUEST_CODE,
+            Intent(this, McpServerService::class.java).setAction(ServiceActions.ACTION_SERVER_STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = ForegroundNotificationFactory.build(
+            this,
+            "MCP API available at ${serverUrl()}",
+            stopIntent = stopIntent
+        )
         val foregroundServiceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         } else {
@@ -107,6 +120,7 @@ class McpServerService : Service(), McpPluginManager.PermissionRequester {
             return
         }
         serverRunning.set(true)
+        _isRunning.value = true
         serverThread = thread(name = "mcp-http-server") {
             try {
                 // Bind to all interfaces so the server is reachable from other devices on LAN.
@@ -126,6 +140,7 @@ class McpServerService : Service(), McpPluginManager.PermissionRequester {
             } catch (e: Exception) {
                 AppLogger.e(TAG, "Server thread failed", e)
                 serverRunning.set(false)
+                _isRunning.value = false
             }
         }
     }
@@ -133,6 +148,7 @@ class McpServerService : Service(), McpPluginManager.PermissionRequester {
     private fun stopServer() {
         AppLogger.i(TAG, "Stopping server")
         serverRunning.set(false)
+        _isRunning.value = false
         serverSocket?.close()
         serverSocket = null
         serverThread?.interrupt()
@@ -471,7 +487,10 @@ class McpServerService : Service(), McpPluginManager.PermissionRequester {
     companion object {
         private const val TAG = "McpServerService"
         private const val NOTIFICATION_ID = 102
+        private const val STOP_REQUEST_CODE = 102
         private const val PORT = 8765
+        private val _isRunning = MutableStateFlow(false)
+        val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
         private const val MCP_SERVER_NAME = "mcp-android-http"
         private const val MCP_SERVER_VERSION = "1.0.0"
         private const val MCP_PROTOCOL_VERSION = "2025-06-18"
