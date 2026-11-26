@@ -27,6 +27,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.ServiceCompat
 import com.damn.mcpbox.R
+import com.damn.mcpbox.shizuku.ShizukuHelper
 
 class FloatingVirtualDisplayService : Service() {
     private lateinit var windowManager: WindowManager
@@ -38,6 +39,7 @@ class FloatingVirtualDisplayService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "Service created")
+        ShizukuHelper.init()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         ForegroundNotificationFactory.ensureChannel(this)
         val stopIntent = PendingIntent.getService(
@@ -245,12 +247,30 @@ class FloatingVirtualDisplayService : Service() {
             return
         }
 
+        val componentName = intent.component?.flattenToShortString()
+        if (componentName != null && ShizukuHelper.isReady()) {
+            Log.i(TAG, "Launching $componentName on displayId=${display.displayId} via Shizuku")
+            ShizukuHelper.launchOnDisplay(this, componentName, display.displayId) { success ->
+                if (success) {
+                    Log.i(TAG, "Started $componentName on virtual display ${display.displayId} via Shizuku")
+                } else {
+                    Log.w(TAG, "Shizuku launch failed for $componentName; falling back")
+                    launchDirectlyOrFallback(packageName, display.displayId, intent)
+                }
+            }
+            return
+        }
+
+        launchDirectlyOrFallback(packageName, display.displayId, intent)
+    }
+
+    private fun launchDirectlyOrFallback(packageName: String, displayId: Int, intent: Intent) {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (!canLaunchOnDisplay(display.displayId, intent)) {
+            if (!canLaunchOnDisplay(displayId, intent)) {
                 Log.w(
                     TAG,
-                    "Platform policy denied launch package=$packageName on displayId=${display.displayId}; fallback to main display"
+                    "Platform policy denied launch package=$packageName on displayId=$displayId; fallback to main display"
                 )
                 launchOnMainDisplay(intent)
                 return
@@ -258,21 +278,21 @@ class FloatingVirtualDisplayService : Service() {
 
             try {
                 intent.addFlags(Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT)
-                val options = ActivityOptions.makeBasic().setLaunchDisplayId(display.displayId)
-                Log.d(TAG, "Starting package=$packageName on displayId=${display.displayId}")
+                val options = ActivityOptions.makeBasic().setLaunchDisplayId(displayId)
+                Log.d(TAG, "Starting package=$packageName on displayId=$displayId")
                 startActivity(intent, options.toBundle())
                 Log.i(TAG, "Started package=$packageName on virtual display")
             } catch (e: SecurityException) {
                 Log.e(
                     TAG,
-                    "SecurityException launching on displayId=${display.displayId} package=$packageName. Fallback to main display.",
+                    "SecurityException launching on displayId=$displayId package=$packageName. Fallback to main display.",
                     e
                 )
                 launchOnMainDisplay(intent)
             } catch (e: IllegalArgumentException) {
                 Log.e(
                     TAG,
-                    "IllegalArgumentException launching on displayId=${display.displayId} package=$packageName. Fallback to main display.",
+                    "IllegalArgumentException launching on displayId=$displayId package=$packageName. Fallback to main display.",
                     e
                 )
                 launchOnMainDisplay(intent)

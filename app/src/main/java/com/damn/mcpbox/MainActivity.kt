@@ -52,6 +52,8 @@ import com.damn.mcpbox.ui.theme.MCPboxTheme
 import com.damn.mcpbox.service.FloatingVirtualDisplayService
 import com.damn.mcpbox.service.McpServerService
 import com.damn.mcpbox.service.ServiceActions
+import com.damn.mcpbox.shizuku.ShizukuHelper
+import com.damn.mcpbox.shizuku.ShizukuStatus
 import com.damn.mcpbox.ui.components.LauncherApp
 import com.damn.mcpbox.ui.components.LauncherPicker
 import com.damn.mcpbox.ui.components.McpSettingsScreen
@@ -59,6 +61,7 @@ import com.damn.mcpbox.ui.components.McpSettingsScreen
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ShizukuHelper.init()
         enableEdgeToEdge()
         setContent {
             MCPboxTheme {
@@ -80,6 +83,7 @@ private fun HomeScreen(modifier: Modifier = Modifier) {
     var showPicker by remember { mutableStateOf(false) }
     var selectedApp by remember { mutableStateOf<LauncherApp?>(null) }
     val serverStarted by McpServerService.isRunning.collectAsState()
+    val shizukuStatus by ShizukuHelper.status.collectAsState()
     var virtualDisplayEnabled by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var keepScreenOn by remember {
@@ -116,9 +120,10 @@ private fun HomeScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    // Refresh accessibility state when returning to foreground
+    // Refresh accessibility and Shizuku state when returning to foreground
     androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
         isAccessibilityEnabled = isAccessibilityServiceEnabled(context, McpAccessibilityService::class.java)
+        ShizukuHelper.refreshStatus()
     }
 
     val pluginManager = remember { McpPluginManager(context) }
@@ -231,6 +236,34 @@ private fun HomeScreen(modifier: Modifier = Modifier) {
         }
 
         if (virtualDisplayEnabled) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Shizuku", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = when (shizukuStatus) {
+                            ShizukuStatus.READY -> "Ready (can launch apps on virtual screen)"
+                            ShizukuStatus.PERMISSION_REQUIRED -> "Running — permission required"
+                            ShizukuStatus.NOT_RUNNING -> "Not running (start Shizuku app first)"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (shizukuStatus == ShizukuStatus.READY) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        }
+                    )
+                }
+                if (shizukuStatus == ShizukuStatus.PERMISSION_REQUIRED) {
+                    Button(onClick = { ShizukuHelper.requestPermission() }) {
+                        Text("Grant")
+                    }
+                }
+            }
+
             Button(onClick = {
                 context.startActivity(
                     Intent(

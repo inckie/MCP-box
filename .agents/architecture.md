@@ -21,19 +21,23 @@ Primary goal: select installed apps and attempt to launch them on a virtual disp
 - `app/src/main/java/com/damn/mcpbox/mcp/plugins/`
   - Modular plugin implementations (Accessibility, Contacts, Calendar, Media, SMS, Settings).
 - `app/src/main/java/com/damn/mcpbox/service/FloatingVirtualDisplayService.kt`
-  - Foreground service hosting draggable overlay (`WindowManager`).
-  - Creates `VirtualDisplay` on `SurfaceView` surface.
-  - Attempts app launch with `ActivityOptions.setLaunchDisplayId(...)`.
+  - `specialUse` foreground service hosting draggable overlay (`WindowManager`).
+  - Creates a `720×1280` @ `320 dpi` portrait `VirtualDisplay` (`McpBoxVirtualDisplay`) on a scaled 9:16 `SurfaceView` (`holder.setFixedSize(720, 1280)`).
+  - Launches apps via Shizuku (`ShizukuHelper.launchOnDisplay(...)`) when ready; otherwise falls back to `ActivityOptions.setLaunchDisplayId(...)` / main display.
+- `app/src/main/java/com/damn/mcpbox/shizuku/`
+  - `ShizukuHelper.kt`: Tracks Shizuku binder/permission state (`NOT_RUNNING`, `PERMISSION_REQUIRED`, `READY`), binds `ShellUserService`, and runs display launches off the main thread.
+  - `ShellUserService.kt` + `app/src/main/aidl/com/damn/mcpbox/shizuku/IShellUserService.aidl`: Privileged Shizuku `UserService` running `am start --display <id> -n <component>` with `shell` UID privileges.
 - `app/src/main/java/com/damn/mcpbox/service/McpServerService.kt`
-  - Foreground service with localhost HTTP server (`127.0.0.1:8765`).
-  - Maps MCP-like endpoints to app/service actions.
+  - `specialUse` foreground service with LAN/localhost HTTP server (`0.0.0.0:8765`).
+  - Exposes `isRunning: StateFlow<Boolean>` for UI synchronization.
+  - Maps MCP JSON-RPC 2.0 endpoints to plugins and resources.
 - `app/src/main/java/com/damn/mcpbox/accessibility/McpAccessibilityService.kt`
   - Performs global actions (`back`, `home`, `recents`, `notifications`).
   - Performs click-by-text traversal in active window.
 - `app/src/main/java/com/damn/mcpbox/service/ServiceActions.kt`
   - Shared action constants between UI and services.
 - `app/src/main/java/com/damn/mcpbox/service/ForegroundNotificationFactory.kt`
-  - Notification channel + foreground notification builder.
+  - Notification channel + foreground notification builder with tap-to-open (`MainActivity`) and **Stop** action button.
 
 ## Runtime Interaction Flow
 1. User opens `MainActivity`.
@@ -65,10 +69,11 @@ To add a new plugin:
 ## Permissions and Manifest Dependencies
 Defined in `app/src/main/AndroidManifest.xml`:
 - `android.permission.INTERNET`, `SYSTEM_ALERT_WINDOW`, `WAKE_LOCK`
-- `android.permission.FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC`
+- `android.permission.FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE` (with `PROPERTY_SPECIAL_USE_FGS_SUBTYPE` on both foreground services to avoid Android 15+ `dataSync` 6-hour timeout)
 - `android.permission.POST_NOTIFICATIONS`
 - Runtime Permissions: `READ_CONTACTS`, `READ_CALENDAR`, `READ_SMS`, `READ_EXTERNAL_STORAGE`, `READ_MEDIA_*`
 - Accessibility service binding: `android.permission.BIND_ACCESSIBILITY_SERVICE`
+- Shizuku binder delivery provider: `rikka.shizuku.ShizukuProvider` (`authorities="${applicationId}.shizuku"`) and `<package android:name="moe.shizuku.privileged.api" />` in `<queries>`.
 - Package visibility query for launcher activities.
 
 ## Platform Constraints (Important)
