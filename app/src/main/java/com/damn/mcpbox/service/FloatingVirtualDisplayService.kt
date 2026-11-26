@@ -125,8 +125,18 @@ class FloatingVirtualDisplayService : Service() {
         }
         container.addView(title)
 
+        val dm = resources.displayMetrics
+        val maxPreviewHeight = (dm.heightPixels * 0.6f).toInt()
+        var previewWidth = (dm.widthPixels * 0.5f).toInt().coerceIn(270, VIRTUAL_DISPLAY_WIDTH)
+        var previewHeight = previewWidth * VIRTUAL_DISPLAY_HEIGHT / VIRTUAL_DISPLAY_WIDTH
+        if (previewHeight > maxPreviewHeight) {
+            previewHeight = maxPreviewHeight
+            previewWidth = previewHeight * VIRTUAL_DISPLAY_WIDTH / VIRTUAL_DISPLAY_HEIGHT
+        }
+
         surfaceView = SurfaceView(this).also { sv ->
-            sv.layoutParams = LinearLayout.LayoutParams(720, 460)
+            sv.layoutParams = LinearLayout.LayoutParams(previewWidth, previewHeight)
+            sv.holder.setFixedSize(VIRTUAL_DISPLAY_WIDTH, VIRTUAL_DISPLAY_HEIGHT)
             sv.holder.addCallback(object : SurfaceHolder.Callback {
                 override fun surfaceCreated(holder: SurfaceHolder) {
                     Log.d(TAG, "Surface created isValid=${holder.surface.isValid}")
@@ -189,7 +199,6 @@ class FloatingVirtualDisplayService : Service() {
         releaseVirtualDisplay()
 
         val displayManager = getSystemService(DISPLAY_SERVICE) as DisplayManager
-        val displayMetrics: DisplayMetrics = resources.displayMetrics
         val virtualDisplayFlags =
             DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY or
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
@@ -197,13 +206,13 @@ class FloatingVirtualDisplayService : Service() {
         virtualDisplay = try {
             Log.d(
                 TAG,
-                "Creating virtual display width=1920 height=1280 density=${displayMetrics.densityDpi} flags=$virtualDisplayFlags surfaceValid=${surface.isValid}"
+                "Creating virtual display width=$VIRTUAL_DISPLAY_WIDTH height=$VIRTUAL_DISPLAY_HEIGHT density=$VIRTUAL_DISPLAY_DENSITY_DPI flags=$virtualDisplayFlags surfaceValid=${surface.isValid}"
             )
             displayManager.createVirtualDisplay(
                 "McpBoxVirtualDisplay",
-                1920,
-                1280,
-                displayMetrics.densityDpi,
+                VIRTUAL_DISPLAY_WIDTH,
+                VIRTUAL_DISPLAY_HEIGHT,
+                VIRTUAL_DISPLAY_DENSITY_DPI,
                 surface,
                 virtualDisplayFlags
             ).also {
@@ -345,6 +354,9 @@ class FloatingVirtualDisplayService : Service() {
         private const val TAG = "FloatVirtualDisplay"
         private const val NOTIFICATION_ID = 101
         private const val STOP_REQUEST_CODE = 101
+        private const val VIRTUAL_DISPLAY_WIDTH = 720
+        private const val VIRTUAL_DISPLAY_HEIGHT = 1280
+        private const val VIRTUAL_DISPLAY_DENSITY_DPI = DisplayMetrics.DENSITY_XHIGH
     }
 }
 
