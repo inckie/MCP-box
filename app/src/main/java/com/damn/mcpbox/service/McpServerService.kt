@@ -234,6 +234,7 @@ class McpServerService : Service(), McpPluginManager.PermissionRequester {
                         .put("ok", true)
                         .put("serverUrl", serverUrl())
                         .put("accessibilityConnected", McpAccessibilityService.isConnected())
+                        .put("virtualDisplayId", FloatingVirtualDisplayService.activeDisplayId ?: JSONObject.NULL)
                 )
                 else -> httpText(404, "Not found")
             }
@@ -339,7 +340,22 @@ class McpServerService : Service(), McpPluginManager.PermissionRequester {
 
                 val args = params.optJSONObject("arguments") ?: JSONObject()
                 val toolResult = tool.call(this, args)
-                val result = JSONObject().put("content", JSONArray().put(JSONObject().put("type", "text").put("text", toolResult.toString())))
+                val content = JSONArray()
+                val imageBase64 = toolResult.optString("_imageBase64").ifBlank { null }
+                if (imageBase64 != null) {
+                    val mimeType = toolResult.optString("mimeType", "image/png")
+                    val metadata = JSONObject(toolResult.toString()).apply { remove("_imageBase64") }
+                    content.put(JSONObject().put("type", "text").put("text", metadata.toString()))
+                    content.put(
+                        JSONObject()
+                            .put("type", "image")
+                            .put("data", imageBase64)
+                            .put("mimeType", mimeType)
+                    )
+                } else {
+                    content.put(JSONObject().put("type", "text").put("text", toolResult.toString()))
+                }
+                val result = JSONObject().put("content", content)
                 jsonRpcSuccess(id, result)
             }
 
@@ -413,23 +429,37 @@ class McpServerService : Service(), McpPluginManager.PermissionRequester {
                     .put("uri", "screenshot://current")
                     .put("name", "Current screen screenshot")
                     .put("mimeType", "image/png")
-                    .put("description", "A real-time screenshot of the current screen")
+                    .put("description", "A real-time screenshot of the main screen")
+            )
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            resources.put(
+                JSONObject()
+                    .put("uri", "screenshot://virtual")
+                    .put("name", "Virtual display screenshot")
+                    .put("mimeType", "image/png")
+                    .put("description", "A real-time screenshot of McpBoxVirtualDisplay")
             )
         }
         return resources
     }
 
     private fun handleResourceRead(uri: String): JSONArray? {
-        if (uri == "screenshot://current") {
-            val base64 = McpAccessibilityService.takeScreenshot()
-            if (base64 != null) {
-                return JSONArray().put(
-                    JSONObject()
-                        .put("uri", uri)
-                        .put("mimeType", "image/png")
-                        .put("blob", base64)
-                )
+        val base64 = when (uri) {
+            "screenshot://current" -> McpAccessibilityService.takeScreenshot()
+            "screenshot://virtual" -> {
+                val displayId = FloatingVirtualDisplayService.activeDisplayId ?: return null
+                McpAccessibilityService.takeScreenshot(displayId)
             }
+            else -> null
+        }
+        if (base64 != null) {
+            return JSONArray().put(
+                JSONObject()
+                    .put("uri", uri)
+                    .put("mimeType", "image/png")
+                    .put("blob", base64)
+            )
         }
         return null
     }

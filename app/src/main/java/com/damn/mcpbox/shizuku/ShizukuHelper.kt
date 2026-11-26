@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import rikka.shizuku.Shizuku
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 enum class ShizukuStatus {
@@ -142,6 +144,33 @@ object ShizukuHelper {
         }
     }
 
+    fun runInputSync(context: Context, vararg args: String): Boolean {
+        if (!isReady()) return false
+        val latch = CountDownLatch(1)
+        var result = false
+        withShellService(context) { service ->
+            if (service == null) {
+                latch.countDown()
+                return@withShellService
+            }
+            thread(name = "shizuku-input") {
+                result = try {
+                    service.runInputCommand(args) == 0
+                } catch (e: Exception) {
+                    Log.e(TAG, "Shizuku runInputCommand failed", e)
+                    synchronized(this@ShizukuHelper) {
+                        shellService = null
+                    }
+                    false
+                } finally {
+                    latch.countDown()
+                }
+            }
+        }
+        latch.await(5, TimeUnit.SECONDS)
+        return result
+    }
+
     private fun withShellService(context: Context, callback: (IShellUserService?) -> Unit) {
         val existing = shellService
         if (existing != null && existing.asBinder().pingBinder()) {
@@ -170,7 +199,7 @@ object ShizukuHelper {
             .daemon(false)
             .processNameSuffix("shizuku_shell")
             .debuggable(true)
-            .version(1)
+            .version(2)
 
         val connection = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {

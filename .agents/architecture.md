@@ -23,17 +23,18 @@ Primary goal: select installed apps and attempt to launch them on a virtual disp
 - `app/src/main/java/com/damn/mcpbox/service/FloatingVirtualDisplayService.kt`
   - `specialUse` foreground service hosting draggable overlay (`WindowManager`).
   - Creates a `720×1280` @ `320 dpi` portrait `VirtualDisplay` (`McpBoxVirtualDisplay`) on a scaled 9:16 `SurfaceView` (`holder.setFixedSize(720, 1280)`).
+  - Exposes `activeDisplayId` and `captureVirtualScreenshot()` (`PixelCopy` on `SurfaceView`) for MCP virtual-display targeting.
   - Launches apps via Shizuku (`ShizukuHelper.launchOnDisplay(...)`) when ready; otherwise falls back to `ActivityOptions.setLaunchDisplayId(...)` / main display.
 - `app/src/main/java/com/damn/mcpbox/shizuku/`
-  - `ShizukuHelper.kt`: Tracks Shizuku binder/permission state (`NOT_RUNNING`, `PERMISSION_REQUIRED`, `READY`), binds `ShellUserService`, and runs display launches off the main thread.
-  - `ShellUserService.kt` + `app/src/main/aidl/com/damn/mcpbox/shizuku/IShellUserService.aidl`: Privileged Shizuku `UserService` running `am start --display <id> -n <component>` with `shell` UID privileges.
+  - `ShizukuHelper.kt`: Tracks Shizuku binder/permission state (`NOT_RUNNING`, `PERMISSION_REQUIRED`, `READY`), binds `ShellUserService`, and runs display launches and `input` commands off the main thread.
+  - `ShellUserService.kt` + `app/src/main/aidl/com/damn/mcpbox/shizuku/IShellUserService.aidl`: Privileged Shizuku `UserService` running `am start --display <id> -n <component>` and `input -d <id> ...` with `shell` UID privileges.
 - `app/src/main/java/com/damn/mcpbox/service/McpServerService.kt`
   - `specialUse` foreground service with LAN/localhost HTTP server (`0.0.0.0:8765`).
   - Exposes `isRunning: StateFlow<Boolean>` for UI synchronization.
-  - Maps MCP JSON-RPC 2.0 endpoints to plugins and resources.
+  - Maps MCP JSON-RPC 2.0 endpoints to plugins and resources (`screenshot://current`, `screenshot://virtual`), and supports native MCP `image` content blocks for `accessibility/screenshot`.
 - `app/src/main/java/com/damn/mcpbox/accessibility/McpAccessibilityService.kt`
-  - Performs global actions (`back`, `home`, `recents`, `notifications`).
-  - Performs click-by-text traversal in active window.
+  - Supports multi-display targeting (`windowsOnAllDisplays` + `GestureDescription.Builder.setDisplayId`) with Shizuku `input -d <displayId>` fallback for `tap`, `swipe`, `scroll`, `set_text`, `input_text`, `key_event`, and `global_action`.
+  - Performs global actions (`back`, `home`, `recents`, `notifications`) and click-by-text/viewId traversal on main display windows.
 - `app/src/main/java/com/damn/mcpbox/service/ServiceActions.kt`
   - Shared action constants between UI and services.
 - `app/src/main/java/com/damn/mcpbox/service/ForegroundNotificationFactory.kt`

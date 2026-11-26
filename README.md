@@ -85,10 +85,14 @@ Base URL: `http://127.0.0.1:8765`
 Tools are dynamically registered from enabled plugins and follow the `pluginId/toolName` naming convention.
 
 ### Available Resources
-- `screenshot://current`: Real-time PNG screenshot (Android 11+).
+- `screenshot://current`: Real-time PNG screenshot of the main screen (Android 11+).
+- `screenshot://virtual`: Real-time PNG screenshot (`720×1280`) of `McpBoxVirtualDisplay` via `PixelCopy` (Android 8+).
 
 ### Available Tools (by Plugin)
-- **accessibility/**: `health`, `global_action`, `click_text`, `click_view_id`, `set_text`, `scroll`, `ui_snapshot`, `find_nodes`, `tap`, `swipe`, `hardware_button`
+- **accessibility/**: `health`, `global_action`, `click_text`, `click_view_id`, `set_text`, `input_text`, `key_event`, `scroll`, `ui_snapshot`, `find_nodes`, `tap`, `swipe`, `hardware_button`, `screenshot`
+  - All `accessibility/*` tools (except `health`) accept optional `target: "main" | "virtual"` or explicit `displayId: <int>`.
+  - On the virtual display (`target: "virtual"`), `tap`, `swipe`, `scroll`, `set_text`, `input_text`, `key_event`, and `global_action` (`back`/`home`) route through Shizuku (`input -d <displayId> ...`) when Shizuku is ready, and `screenshot` uses `PixelCopy`.
+  - Note: Android hides windows on `FLAG_PRIVATE` virtual displays from `AccessibilityService.getWindowsOnAllDisplays()`, so accessibility-tree inspection (`ui_snapshot`, `find_nodes`, `click_text`, `click_view_id`) only works on the main display — use `screenshot` + coordinate/input tools (`tap`, `swipe`, `scroll`, `input_text`, `key_event`) on the virtual screen.
 - **contacts/**: `list`
 - **calendar/**: `list_events`
 - **media/**: `list_images`, `list_videos`, `list_audio`

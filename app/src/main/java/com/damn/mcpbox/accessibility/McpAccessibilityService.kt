@@ -14,6 +14,9 @@ import android.view.Display
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
+import com.damn.mcpbox.service.FloatingVirtualDisplayService
+import com.damn.mcpbox.shizuku.ShizukuHelper
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -26,7 +29,9 @@ class McpAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         serviceInfo = serviceInfo.apply {
-            flags = flags or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+            flags = flags or
+                AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
+                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         }
         Log.d(TAG, "Accessibility service connected")
     }
@@ -42,8 +47,32 @@ class McpAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    private fun clickByText(text: String): Boolean {
-        val root = rootInActiveWindow ?: return false
+    private fun rootNodeForDisplay(displayId: Int): AccessibilityNodeInfo? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val displayWindows = windowsOnAllDisplays.get(displayId)
+            if (!displayWindows.isNullOrEmpty()) {
+                val appWindow = displayWindows
+                    .filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.root != null }
+                    .maxWithOrNull(compareBy<AccessibilityWindowInfo> { it.isActive || it.isFocused }.thenBy { it.layer })
+                if (appWindow?.root != null) {
+                    return appWindow.root
+                }
+                val anyWindow = displayWindows
+                    .filter { it.root != null }
+                    .maxByOrNull { it.layer }
+                if (anyWindow?.root != null) {
+                    return anyWindow.root
+                }
+            }
+            if (displayId != Display.DEFAULT_DISPLAY) {
+                return null
+            }
+        }
+        return rootInActiveWindow
+    }
+
+    private fun clickByText(text: String, displayId: Int): Boolean {
+        val root = rootNodeForDisplay(displayId) ?: return false
         for (node in bfsNodes(root, MAX_SCAN_NODES)) {
             val nodeText = node.text?.toString().orEmpty()
             val nodeDesc = node.contentDescription?.toString().orEmpty()
@@ -56,8 +85,8 @@ class McpAccessibilityService : AccessibilityService() {
         return false
     }
 
-    private fun clickByViewId(viewId: String): Boolean {
-        val root = rootInActiveWindow ?: return false
+    private fun clickByViewId(viewId: String, displayId: Int): Boolean {
+        val root = rootNodeForDisplay(displayId) ?: return false
         for (node in bfsNodes(root, MAX_SCAN_NODES)) {
             if (node.viewIdResourceName == viewId && performClick(node)) {
                 return true
@@ -66,8 +95,14 @@ class McpAccessibilityService : AccessibilityService() {
         return false
     }
 
-    private fun setText(targetText: String?, viewId: String?, value: String): Boolean {
-        val root = rootInActiveWindow ?: return false
+    private fun setText(targetText: String?, viewId: String?, value: String, displayId: Int): Boolean {
+        val root = rootNodeForDisplay(displayId)
+        if (root == null) {
+            if (displayId != Display.DEFAULT_DISPLAY && ShizukuHelper.isReady()) {
+                return inputText(value, displayId, pressEnter = false)
+            }
+            return false
+        }
         for (node in bfsNodes(root, MAX_SCAN_NODES)) {
             if (!node.isEditable) continue
 
@@ -89,14 +124,86 @@ class McpAccessibilityService : AccessibilityService() {
         return false
     }
 
-    private fun scroll(targetText: String?, viewId: String?, direction: String): Boolean {
-        val action = when (direction.lowercase()) {
+    private fun inputText(text: String, displayId: Int, pressEnter: Boolean): Boolean {
+        if (!ShizukuHelper.isReady()) return false
+        val encoded = text.replace(" ", "%s")
+        val typed = ShizukuHelper.runInputSync(
+            this,
+            "-d", displayId.toString(),
+            "text", encoded
+        )
+        if (!typed) return false
+        if (pressEnter) {
+            return ShizukuHelper.runInputSync(
+                this,
+                "-d", displayId.toString(),
+                "keyevent", KeyEvent.KEYCODE_ENTER.toString()
+            )
+        }
+        return true
+    }
+
+    private fun sendKeyEvent(key: String, displayId: Int, longPress: Boolean): Boolean {
+        if (!ShizukuHelper.isReady()) return false
+        val keyCode = resolveKeyCode(key) ?: return false
+        val args = mutableListOf("-d", displayId.toString(), "keyevent")
+        if (longPress) args.add("--longpress")
+        args.add(keyCode.toString())
+        return ShizukuHelper.runInputSync(this, *args.toTypedArray())
+    }
+
+    private fun resolveKeyCode(key: String): Int? {
+        key.toIntOrNull()?.let { return it }
+        return when (key.lowercase()) {
+            "back" -> KeyEvent.KEYCODE_BACK
+            "home" -> KeyEvent.KEYCODE_HOME
+            "enter", "return" -> KeyEvent.KEYCODE_ENTER
+            "del", "backspace" -> KeyEvent.KEYCODE_DEL
+            "forward_del", "delete" -> KeyEvent.KEYCODE_FORWARD_DEL
+            "tab" -> KeyEvent.KEYCODE_TAB
+            "space" -> KeyEvent.KEYCODE_SPACE
+            "escape", "esc" -> KeyEvent.KEYCODE_ESCAPE
+            "recents", "app_switch" -> KeyEvent.KEYCODE_APP_SWITCH
+            "menu" -> KeyEvent.KEYCODE_MENU
+            "dpad_up", "up" -> KeyEvent.KEYCODE_DPAD_UP
+            "dpad_down", "down" -> KeyEvent.KEYCODE_DPAD_DOWN
+            "dpad_left", "left" -> KeyEvent.KEYCODE_DPAD_LEFT
+            "dpad_right", "right" -> KeyEvent.KEYCODE_DPAD_RIGHT
+            "dpad_center", "center" -> KeyEvent.KEYCODE_DPAD_CENTER
+            "page_up" -> KeyEvent.KEYCODE_PAGE_UP
+            "page_down" -> KeyEvent.KEYCODE_PAGE_DOWN
+            "copy" -> KeyEvent.KEYCODE_COPY
+            "paste" -> KeyEvent.KEYCODE_PASTE
+            "cut" -> KeyEvent.KEYCODE_CUT
+            else -> null
+        }
+    }
+
+    private fun scroll(targetText: String?, viewId: String?, direction: String, displayId: Int): Boolean {
+        val dir = direction.lowercase()
+        val action = when (dir) {
             "forward", "down", "right" -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
             "backward", "up", "left" -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
             else -> return false
         }
 
-        val root = rootInActiveWindow ?: return false
+        val root = rootNodeForDisplay(displayId)
+        if (root == null) {
+            if (displayId != Display.DEFAULT_DISPLAY && ShizukuHelper.isReady()) {
+                val w = FloatingVirtualDisplayService.VIRTUAL_DISPLAY_WIDTH
+                val h = FloatingVirtualDisplayService.VIRTUAL_DISPLAY_HEIGHT
+                val cx = w / 2f
+                val cy = h / 2f
+                return when (dir) {
+                    "forward", "down" -> swipe(cx, h * 0.75f, cx, h * 0.25f, 350L, displayId)
+                    "backward", "up" -> swipe(cx, h * 0.25f, cx, h * 0.75f, 350L, displayId)
+                    "right" -> swipe(w * 0.8f, cy, w * 0.2f, cy, 350L, displayId)
+                    "left" -> swipe(w * 0.2f, cy, w * 0.8f, cy, 350L, displayId)
+                    else -> false
+                }
+            }
+            return false
+        }
         for (node in bfsNodes(root, MAX_SCAN_NODES)) {
             val matchesViewId = !viewId.isNullOrBlank() && node.viewIdResourceName == viewId
             val nodeText = node.text?.toString().orEmpty()
@@ -112,10 +219,11 @@ class McpAccessibilityService : AccessibilityService() {
         return false
     }
 
-    private fun uiSnapshot(maxNodes: Int): JSONObject {
-        val root = rootInActiveWindow ?: return JSONObject()
+    private fun uiSnapshot(maxNodes: Int, displayId: Int): JSONObject {
+        val root = rootNodeForDisplay(displayId) ?: return JSONObject()
             .put("ok", false)
-            .put("error", "No active window")
+            .put("displayId", displayId)
+            .put("error", "No active window on display $displayId")
 
         val snapshotNodes = bfsSnapshotNodes(root, maxNodes.coerceIn(1, MAX_SCAN_NODES))
         val nodesJson = JSONArray()
@@ -125,13 +233,14 @@ class McpAccessibilityService : AccessibilityService() {
 
         return JSONObject()
             .put("ok", true)
+            .put("displayId", displayId)
             .put("capturedAtMs", SystemClock.elapsedRealtime())
             .put("nodeCount", snapshotNodes.size)
             .put("nodes", nodesJson)
     }
 
-    private fun findNodes(targetText: String?, viewId: String?, limit: Int): JSONArray {
-        val root = rootInActiveWindow ?: return JSONArray()
+    private fun findNodes(targetText: String?, viewId: String?, limit: Int, displayId: Int): JSONArray {
+        val root = rootNodeForDisplay(displayId) ?: return JSONArray()
         val results = JSONArray()
         val boundedLimit = limit.coerceIn(1, 100)
 
@@ -155,25 +264,52 @@ class McpAccessibilityService : AccessibilityService() {
         return results
     }
 
-    private fun tap(x: Float, y: Float, durationMs: Long): Boolean {
+    private fun tap(x: Float, y: Float, durationMs: Long, displayId: Int): Boolean {
         val boundedDuration = durationMs.coerceIn(50L, 2_000L)
         val path = Path().apply { moveTo(x, y) }
-        val gesture = GestureDescription.Builder()
+        val builder = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0L, boundedDuration))
-            .build()
-        return runGesture(gesture)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            builder.setDisplayId(displayId)
+        }
+        if (runGesture(builder.build())) {
+            return true
+        }
+        if (displayId != Display.DEFAULT_DISPLAY && ShizukuHelper.isReady()) {
+            return ShizukuHelper.runInputSync(
+                this,
+                "-d", displayId.toString(),
+                "tap", x.toInt().toString(), y.toInt().toString()
+            )
+        }
+        return false
     }
 
-    private fun swipe(x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long): Boolean {
+    private fun swipe(x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long, displayId: Int): Boolean {
         val boundedDuration = durationMs.coerceIn(100L, 5_000L)
         val path = Path().apply {
             moveTo(x1, y1)
             lineTo(x2, y2)
         }
-        val gesture = GestureDescription.Builder()
+        val builder = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0L, boundedDuration))
-            .build()
-        return runGesture(gesture)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            builder.setDisplayId(displayId)
+        }
+        if (runGesture(builder.build())) {
+            return true
+        }
+        if (displayId != Display.DEFAULT_DISPLAY && ShizukuHelper.isReady()) {
+            return ShizukuHelper.runInputSync(
+                this,
+                "-d", displayId.toString(),
+                "swipe",
+                x1.toInt().toString(), y1.toInt().toString(),
+                x2.toInt().toString(), y2.toInt().toString(),
+                boundedDuration.toString()
+            )
+        }
+        return false
     }
 
     private fun runGesture(gesture: GestureDescription): Boolean {
@@ -325,13 +461,16 @@ class McpAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun takeScreenshot(): String? {
+    private fun takeScreenshot(displayId: Int): String? {
+        if (displayId != Display.DEFAULT_DISPLAY && displayId == FloatingVirtualDisplayService.activeDisplayId) {
+            FloatingVirtualDisplayService.captureVirtualScreenshot()?.let { return it }
+        }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
 
         val latch = CountDownLatch(1)
         var base64: String? = null
 
-        takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+        takeScreenshot(displayId, mainExecutor, object : TakeScreenshotCallback {
             override fun onSuccess(screenshot: ScreenshotResult) {
                 try {
                     val bitmap = Bitmap.wrapHardwareBuffer(screenshot.hardwareBuffer, screenshot.colorSpace)
@@ -372,8 +511,22 @@ class McpAccessibilityService : AccessibilityService() {
 
         fun isConnected(): Boolean = instance != null
 
-        fun performGlobalActionByName(name: String): Boolean {
+        fun performGlobalActionByName(name: String, displayId: Int = Display.DEFAULT_DISPLAY): Boolean {
             val service = instance ?: return false
+            if (displayId != Display.DEFAULT_DISPLAY && ShizukuHelper.isReady()) {
+                val keyCode = when (name.lowercase()) {
+                    "back" -> KeyEvent.KEYCODE_BACK
+                    "home" -> KeyEvent.KEYCODE_HOME
+                    else -> null
+                }
+                if (keyCode != null) {
+                    return ShizukuHelper.runInputSync(
+                        service,
+                        "-d", displayId.toString(),
+                        "keyevent", keyCode.toString()
+                    )
+                }
+            }
             val action = when (name.lowercase()) {
                 "back" -> GLOBAL_ACTION_BACK
                 "home" -> GLOBAL_ACTION_HOME
@@ -386,15 +539,15 @@ class McpAccessibilityService : AccessibilityService() {
             return service.performGlobalAction(action)
         }
 
-        fun performHardwareButton(name: String): Boolean {
+        fun performHardwareButton(name: String, displayId: Int = Display.DEFAULT_DISPLAY): Boolean {
             val service = instance ?: return false
             return when (name.lowercase()) {
                 "back", "home", "recents", "notifications", "quick_settings", "power_dialog" -> {
-                    performGlobalActionByName(name)
+                    performGlobalActionByName(name, displayId)
                 }
 
                 // There is no universal MENU global action; use best-effort UI target.
-                "menu" -> service.clickByText("Menu") || service.clickByText("More options")
+                "menu" -> service.clickByText("Menu", displayId) || service.clickByText("More options", displayId)
 
                 "media_play_pause", "play_pause", "toggle_playback" -> service.dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
                 "media_play", "play" -> service.dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
@@ -406,52 +559,65 @@ class McpAccessibilityService : AccessibilityService() {
             }
         }
 
-        fun clickNodeByText(text: String): Boolean {
+        fun clickNodeByText(text: String, displayId: Int = Display.DEFAULT_DISPLAY): Boolean {
             val service = instance ?: return false
-            return service.clickByText(text)
+            return service.clickByText(text, displayId)
         }
 
-        fun clickNodeByViewId(viewId: String): Boolean {
+        fun clickNodeByViewId(viewId: String, displayId: Int = Display.DEFAULT_DISPLAY): Boolean {
             val service = instance ?: return false
-            return service.clickByViewId(viewId)
+            return service.clickByViewId(viewId, displayId)
         }
 
-        fun setText(targetText: String?, viewId: String?, value: String): Boolean {
+        fun setText(targetText: String?, viewId: String?, value: String, displayId: Int = Display.DEFAULT_DISPLAY): Boolean {
             val service = instance ?: return false
-            return service.setText(targetText, viewId, value)
+            return service.setText(targetText, viewId, value, displayId)
         }
 
-        fun scroll(targetText: String?, viewId: String?, direction: String): Boolean {
+        fun inputText(text: String, displayId: Int = Display.DEFAULT_DISPLAY, pressEnter: Boolean = false): Boolean {
             val service = instance ?: return false
-            return service.scroll(targetText, viewId, direction)
+            return service.inputText(text, displayId, pressEnter)
         }
 
-        fun uiSnapshot(maxNodes: Int): JSONObject {
+        fun sendKeyEvent(key: String, displayId: Int = Display.DEFAULT_DISPLAY, longPress: Boolean = false): Boolean {
+            val service = instance ?: return false
+            return service.sendKeyEvent(key, displayId, longPress)
+        }
+
+        fun scroll(targetText: String?, viewId: String?, direction: String, displayId: Int = Display.DEFAULT_DISPLAY): Boolean {
+            val service = instance ?: return false
+            return service.scroll(targetText, viewId, direction, displayId)
+        }
+
+        fun uiSnapshot(maxNodes: Int, displayId: Int = Display.DEFAULT_DISPLAY): JSONObject {
             val service = instance
             return if (service == null) {
                 JSONObject().put("ok", false).put("error", "Accessibility service is not connected")
             } else {
-                service.uiSnapshot(maxNodes)
+                service.uiSnapshot(maxNodes, displayId)
             }
         }
 
-        fun findNodes(targetText: String?, viewId: String?, limit: Int): JSONArray {
+        fun findNodes(targetText: String?, viewId: String?, limit: Int, displayId: Int = Display.DEFAULT_DISPLAY): JSONArray {
             val service = instance ?: return JSONArray()
-            return service.findNodes(targetText, viewId, limit)
+            return service.findNodes(targetText, viewId, limit, displayId)
         }
 
-        fun tap(x: Float, y: Float, durationMs: Long): Boolean {
+        fun tap(x: Float, y: Float, durationMs: Long, displayId: Int = Display.DEFAULT_DISPLAY): Boolean {
             val service = instance ?: return false
-            return service.tap(x, y, durationMs)
+            return service.tap(x, y, durationMs, displayId)
         }
 
-        fun swipe(x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long): Boolean {
+        fun swipe(x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long, displayId: Int = Display.DEFAULT_DISPLAY): Boolean {
             val service = instance ?: return false
-            return service.swipe(x1, y1, x2, y2, durationMs)
+            return service.swipe(x1, y1, x2, y2, durationMs, displayId)
         }
 
-        fun takeScreenshot(): String? {
-            return instance?.takeScreenshot()
+        fun takeScreenshot(displayId: Int = Display.DEFAULT_DISPLAY): String? {
+            if (displayId != Display.DEFAULT_DISPLAY && displayId == FloatingVirtualDisplayService.activeDisplayId) {
+                FloatingVirtualDisplayService.captureVirtualScreenshot()?.let { return it }
+            }
+            return instance?.takeScreenshot(displayId)
         }
     }
 }

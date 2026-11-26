@@ -7,15 +7,20 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
+import android.util.Base64
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
+import android.view.PixelCopy
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -28,6 +33,9 @@ import android.widget.Toast
 import androidx.core.app.ServiceCompat
 import com.damn.mcpbox.R
 import com.damn.mcpbox.shizuku.ShizukuHelper
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class FloatingVirtualDisplayService : Service() {
     private lateinit var windowManager: WindowManager
@@ -39,6 +47,7 @@ class FloatingVirtualDisplayService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "Service created")
+        instance = this
         ShizukuHelper.init()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         ForegroundNotificationFactory.ensureChannel(this)
@@ -100,6 +109,9 @@ class FloatingVirtualDisplayService : Service() {
 
     override fun onDestroy() {
         Log.i(TAG, "Service destroyed")
+        if (instance === this) {
+            instance = null
+        }
         super.onDestroy()
         releaseVirtualDisplay()
         removeOverlay()
@@ -218,7 +230,8 @@ class FloatingVirtualDisplayService : Service() {
                 surface,
                 virtualDisplayFlags
             ).also {
-                Log.i(TAG, "Virtual display created displayId=${it.display?.displayId}")
+                activeDisplayId = it.display?.displayId
+                Log.i(TAG, "Virtual display created displayId=$activeDisplayId")
             }
         } catch (e: SecurityException) {
             Log.e(TAG, "Virtual display creation failed due to security policy", e)
@@ -326,6 +339,44 @@ class FloatingVirtualDisplayService : Service() {
         Log.d(TAG, "Releasing virtual display id=${virtualDisplay?.display?.displayId}")
         virtualDisplay?.release()
         virtualDisplay = null
+        activeDisplayId = null
+    }
+
+    private fun captureScreenshotBase64(): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null
+        val sv = surfaceView ?: return null
+        val surface = sv.holder.surface
+        if (!surface.isValid) return null
+
+        val bitmap = Bitmap.createBitmap(VIRTUAL_DISPLAY_WIDTH, VIRTUAL_DISPLAY_HEIGHT, Bitmap.Config.ARGB_8888)
+        val latch = CountDownLatch(1)
+        var copyResult = PixelCopy.ERROR_UNKNOWN
+        val handlerThread = HandlerThread("virtual-pixelcopy").apply { start() }
+        try {
+            PixelCopy.request(
+                sv,
+                bitmap,
+                { result ->
+                    copyResult = result
+                    latch.countDown()
+                },
+                Handler(handlerThread.looper)
+            )
+            latch.await(3, TimeUnit.SECONDS)
+        } catch (e: Exception) {
+            Log.e(TAG, "PixelCopy failed", e)
+            return null
+        } finally {
+            handlerThread.quitSafely()
+        }
+
+        if (copyResult != PixelCopy.SUCCESS) {
+            Log.w(TAG, "PixelCopy failed with code=$copyResult")
+            return null
+        }
+        val out = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+        return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
     }
 
     private fun removeOverlay() {
@@ -374,9 +425,18 @@ class FloatingVirtualDisplayService : Service() {
         private const val TAG = "FloatVirtualDisplay"
         private const val NOTIFICATION_ID = 101
         private const val STOP_REQUEST_CODE = 101
-        private const val VIRTUAL_DISPLAY_WIDTH = 720
-        private const val VIRTUAL_DISPLAY_HEIGHT = 1280
-        private const val VIRTUAL_DISPLAY_DENSITY_DPI = DisplayMetrics.DENSITY_XHIGH
+        const val VIRTUAL_DISPLAY_WIDTH = 720
+        const val VIRTUAL_DISPLAY_HEIGHT = 1280
+        const val VIRTUAL_DISPLAY_DENSITY_DPI = DisplayMetrics.DENSITY_XHIGH
+
+        @Volatile
+        var activeDisplayId: Int? = null
+            private set
+
+        @Volatile
+        private var instance: FloatingVirtualDisplayService? = null
+
+        fun captureVirtualScreenshot(): String? = instance?.captureScreenshotBase64()
     }
 }
 

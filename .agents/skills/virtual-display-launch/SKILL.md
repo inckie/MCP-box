@@ -56,6 +56,19 @@ Use this when Shizuku is not installed/running or when automating from a PC.
    & $adb -s <SERIAL> shell "dumpsys activity activities | grep -E 'Display #<DISPLAY_ID>|topResumedActivity|<PACKAGE>'"
    ```
 
+## Controlling Apps on the Virtual Screen via MCP
+
+- **Health & dimensions**: Call `accessibility/health` (or `GET /health`) to check `virtualDisplayActive`, `virtualDisplayId`, `shizukuReady`, and `720×1280` dimensions.
+- **Screenshots**: Call `accessibility/screenshot` with `{"target": "virtual"}` (returns metadata + native MCP `image` block) or read resource `screenshot://virtual` (`PixelCopy` on the `SurfaceView`).
+- **Input & navigation**: Pass `"target": "virtual"` (or explicit `"displayId"`) to:
+  - `accessibility/tap` (`x`, `y` in `0..720` × `0..1280`)
+  - `accessibility/swipe` (`x1`, `y1`, `x2`, `y2`, `durationMs`)
+  - `accessibility/scroll` (`direction`: `down`/`up`/`left`/`right` — falls back to centered swipe on virtual display)
+  - `accessibility/input_text` (`text`, optional `pressEnter`) or `accessibility/set_text` (falls back to `input -d <id> text` on virtual display)
+  - `accessibility/key_event` (`key`: `back`, `home`, `enter`, `del`, `tab`, `escape`, `dpad_*`, or numeric keycode; optional `longPress`)
+  - `accessibility/global_action` (`back`, `home`)
+- **Limitation**: Android hides windows on `FLAG_PRIVATE` virtual displays from `AccessibilityService.getWindowsOnAllDisplays()`, so `ui_snapshot`, `find_nodes`, `click_text`, and `click_view_id` only work on Display #0.
+
 ## Multi-Display Security Notes
 - Activities belonging to the **same UID** as an app already on `McpBoxVirtualDisplay` stay on the virtual display.
 - Launching a **different third-party UID** from inside an unprivileged app on a `FLAG_PRIVATE` virtual display is blocked/redirected to Display #0 by Android — use Shizuku or ADB for cross-UID launches.
