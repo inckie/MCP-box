@@ -2,8 +2,10 @@ package com.damn.mcpbox.service
 
 import android.app.ActivityOptions
 import android.app.ActivityManager
+import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -22,6 +24,7 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.app.ServiceCompat
 import com.damn.mcpbox.R
 
 class FloatingVirtualDisplayService : Service() {
@@ -36,10 +39,22 @@ class FloatingVirtualDisplayService : Service() {
         Log.i(TAG, "Service created")
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         ForegroundNotificationFactory.ensureChannel(this)
-        startForeground(
-            NOTIFICATION_ID,
-            ForegroundNotificationFactory.build(this, getString(R.string.foreground_notification_text))
-        )
+        val notification = ForegroundNotificationFactory.build(this, getString(R.string.foreground_notification_text))
+        val foregroundServiceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        } else {
+            0
+        }
+        try {
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, foregroundServiceType)
+        } catch (e: Exception) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && e is ForegroundServiceStartNotAllowedException) {
+                Log.e(TAG, "Foreground service start not allowed; stopping self", e)
+                stopSelf()
+            } else {
+                throw e
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -49,7 +64,10 @@ class FloatingVirtualDisplayService : Service() {
         )
         when (intent?.action) {
             ServiceActions.ACTION_SHOW_OVERLAY -> showOverlay()
-            ServiceActions.ACTION_HIDE_OVERLAY -> stopSelf()
+            ServiceActions.ACTION_HIDE_OVERLAY -> {
+                stopSelf()
+                return START_NOT_STICKY
+            }
             ServiceActions.ACTION_LAUNCH_PACKAGE -> {
                 val packageName = intent.getStringExtra(ServiceActions.EXTRA_PACKAGE_NAME)
                 Log.d(TAG, "Launch requested package=$packageName")
@@ -60,6 +78,11 @@ class FloatingVirtualDisplayService : Service() {
             else -> showOverlay()
         }
         return START_STICKY
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        Log.w(TAG, "Foreground service timeout reached (startId=$startId, fgsType=$fgsType); stopping self")
+        stopSelf()
     }
 
     override fun onDestroy() {

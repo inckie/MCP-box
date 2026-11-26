@@ -164,11 +164,7 @@ private fun HomeScreen(modifier: Modifier = Modifier) {
                                 .setAction(ServiceActions.ACTION_SERVER_START)
                         )
                     } else {
-                        startForegroundCompat(
-                            context,
-                            Intent(context, McpServerService::class.java)
-                                .setAction(ServiceActions.ACTION_SERVER_STOP)
-                        )
+                        context.stopService(Intent(context, McpServerService::class.java))
                     }
                     serverStarted = enabled
                 }

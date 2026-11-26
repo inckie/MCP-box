@@ -1,13 +1,16 @@
 package com.damn.mcpbox.service
 
+import android.app.ForegroundServiceStartNotAllowedException
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import com.damn.mcpbox.accessibility.McpAccessibilityService
 import com.damn.mcpbox.mcp.McpPluginManager
 import org.json.JSONArray
@@ -37,16 +40,31 @@ class McpServerService : Service(), McpPluginManager.PermissionRequester {
         super.onCreate()
         AppLogger.i(TAG, "Service created; endpoint=${serverUrl()}")
         ForegroundNotificationFactory.ensureChannel(this)
-        startForeground(
-            NOTIFICATION_ID,
-            ForegroundNotificationFactory.build(this, "MCP API available at ${serverUrl()}")
-        )
+        val notification = ForegroundNotificationFactory.build(this, "MCP API available at ${serverUrl()}")
+        val foregroundServiceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        } else {
+            0
+        }
+        try {
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, foregroundServiceType)
+        } catch (e: Exception) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && e is ForegroundServiceStartNotAllowedException) {
+                AppLogger.e(TAG, "Foreground service start not allowed; stopping self", e)
+                stopSelf()
+            } else {
+                throw e
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         AppLogger.d(TAG, "onStartCommand action=${intent?.action} startId=$startId")
         when (intent?.action) {
-            ServiceActions.ACTION_SERVER_STOP -> stopSelf()
+            ServiceActions.ACTION_SERVER_STOP -> {
+                stopSelf()
+                return START_NOT_STICKY
+            }
             ServiceActions.ACTION_SET_KEEP_SCREEN_ON -> {
                 val enabled = intent.getBooleanExtra(ServiceActions.EXTRA_ENABLED, false)
                 setKeepScreenOn(enabled)
@@ -67,6 +85,11 @@ class McpServerService : Service(), McpPluginManager.PermissionRequester {
             }
         }
         return START_STICKY
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        AppLogger.w(TAG, "Foreground service timeout reached (startId=$startId, fgsType=$fgsType); stopping self")
+        stopSelf()
     }
 
     override fun onDestroy() {
